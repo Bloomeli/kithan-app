@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Kithan App</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        /* Ein kleiner CSS-Trick direkt hier, um Dinge auszublenden */
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+    <main class="dashboard-container">
+        <div class="logo-area">
+            <h1><span class="highlight">K</span>ithan App</h1>
+            <p>Abnahme & Übergabe Protokolle</p>
+        </div>
+
+        <div id="view-objektart" class="button-grid">
+            <button class="main-btn" onclick="selectObjekt('Gewerbe')">Gewerbe</button>
+            <button class="main-btn" onclick="selectObjekt('Privat')">Privat</button>
+            <button class="main-btn" onclick="selectObjekt('Garage')">Garage</button>
+        </div>
+
+        <div id="view-protokollart" class="button-grid hidden">
+            <h2 style="margin-bottom: 20px; font-size: 1.2rem;" id="gewaehlte-objektart"></h2>
+            <button class="main-btn" onclick="selectProtokoll('Abnahme')">Abnahme</button>
+            <button class="main-btn" onclick="selectProtokoll('Übergabe')">Übergabe</button>
+            <button class="main-btn" style="border-color: #ff3333; margin-top: 20px;" onclick="location.reload()">Zurück</button>
+        </div>
+
+        <div id="view-formular" class="form-container hidden">
+            <h2 style="margin-bottom: 20px;">Kopfdaten</h2>
+            
+            <div class="input-group">
+                <label>Name der/des Mieter(s):</label>
+                <input type="text" id="mietername" placeholder="z.B. Max Mustermann">
+            </div>
+
+            <div class="input-group">
+                <label>Besichtigte Wohnung:</label>
+                <select id="gebaeude-auswahl">
+                    <option value="">Bitte Gebäude wählen...</option>
+                    <option value="dummy1">Musterstraße 1, 12345 Stadt</option>
+                    <option value="dummy2">Beispielweg 10, 67890 Ort</option>
+                    </select>
+            </div>
+
+            <div class="radio-group" style="margin-top: 20px; margin-bottom: 30px;">
+                <input type="radio" id="vor-einzug" name="einzug-auszug" value="Einzug">
+                <label for="vor-einzug" style="margin-right: 15px;">vor dem Einzug</label>
+
+                <input type="radio" id="vor-auszug" name="einzug-auszug" value="Auszug">
+                <label for="vor-auszug">vor dem Auszug</label>
+            </div>
+
+            <h3 style="margin-top: 40px; margin-bottom: 20px; color: var(--neon-green);">Zustand der Räume</h3>
+            
+            <div class="raum-karte">
+                <h4>1. Diele/Flur</h4>
+                <div class="radio-group" style="margin-bottom: 10px;">
+                    <input type="checkbox" id="diele-ok">
+                    <label for="diele-ok">In Ordnung (ja)</label>
+                </div>
+                <div class="input-group">
+                    <label>Folgende Mängel festgestellt:</label>
+                    <textarea id="diele-maengel" rows="2" placeholder="Mängel hier eintragen..."></textarea>
+                </div>
+                <div class="input-group">
+                    <label>Bemerkungen:</label>
+                    <textarea id="diele-bemerkungen" rows="2" placeholder="Sonstige Notizen..."></textarea>
+                </div>
+            </div>
+
+            <div class="raum-karte">
+                <h4>2. Küche</h4>
+                <div class="radio-group" style="margin-bottom: 10px;">
+                    <input type="checkbox" id="kueche-ok">
+                    <label for="kueche-ok">In Ordnung (ja)</label>
+                </div>
+                <div class="input-group">
+                    <label>Folgende Mängel festgestellt:</label>
+                    <textarea id="kueche-maengel" rows="2" placeholder="Mängel hier eintragen..."></textarea>
+                </div>
+                <div class="input-group">
+                    <label>Bemerkungen:</label>
+                    <textarea id="kueche-bemerkungen" rows="2" placeholder="Sonstige Notizen..."></textarea>
+                </div>
+            </div>
+            
+            <button class="main-btn" style="border-color: #ff3333; margin-top: 30px;" onclick="location.reload()">Neustart (Abbrechen)</button>
+        </div>
+    </main>
+
+    <script src="app.ts"></script>
+</body>
+</html>
