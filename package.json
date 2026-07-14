@@ -1,0 +1,17 @@
+{
+  "name": "kithan-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Kithan App – Abnahme & Übergabe Protokolle (Prototyp)",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "serve": "http-server . -p 8080 -c-1 -a localhost -o",
+    "dev": "concurrently -n tsc,serve -c blue,green \"npm:watch\" \"npm:serve\""
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.3",
+    "http-server": "^14.1.1",
+    "typescript": "^5.6.3"
+  }
+}

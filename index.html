@@ -5,10 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Kithan App</title>
     <link rel="stylesheet" href="style.css">
-    <style>
-        /* Ein kleiner CSS-Trick direkt hier, um Dinge auszublenden */
-        .hidden { display: none !important; }
-    </style>
 </head>
 <body>
 
@@ -19,59 +15,21 @@
         </div>
 
         <div id="view-objektart" class="button-grid">
-            <button class="main-btn" onclick="selectObjekt('Gewerbe')">Gewerbe</button>
-            <button class="main-btn" onclick="selectObjekt('Privat')">Privat</button>
-            <button class="main-btn" onclick="selectObjekt('Garage')">Garage</button>
+            <button class="main-btn" data-objektart="gewerbe">Gewerbe</button>
+            <button class="main-btn" data-objektart="privat">Privat</button>
+            <button class="main-btn" data-objektart="garage">Garage</button>
         </div>
 
         <div id="view-protokollart" class="button-grid hidden">
             <h2 style="margin-bottom: 20px; font-size: 1.2rem;" id="gewaehlte-objektart"></h2>
-            <button class="main-btn" onclick="selectProtokoll('Abnahme')">Abnahme</button>
-            <button class="main-btn" onclick="selectProtokoll('Übergabe')">Übergabe</button>
-            <button class="main-btn" style="border-color: #ff3333; margin-top: 20px;" onclick="location.reload()">Zurück</button>
+            <button class="main-btn" data-protokollart="abnahme">Abnahme</button>
+            <button class="main-btn" data-protokollart="uebergabe">Übergabe</button>
+            <button class="main-btn" id="btn-zurueck" style="border-color: #ff3333; margin-top: 20px;">Zurück</button>
         </div>
 
-        <h2 style="margin-bottom: 20px;">Kopfdaten</h2>
-
-        <div class="input-group">
-            <label>Name der/des Mieter(s):</label>
-            <input type="text" id="mietername" placeholder="Name eingeben...">
-        </div>
-    
-        <div class="input-group">
-            <label>Besichtigte Wohnung (Straße und Hausnummer):</label>
-            <select id="gebaeude-auswahl">
-                <option value="" disabled selected>Bitte Objekt auswählen...</option>
-                <option value="dummy1">Musterstraße 1, 12345 Stadt</option>
-                <option value="dummy2">Beispielweg 10, 67890 Ort</option>
-            </select>
-        </div>
-    
-        <div class="radio-group" style="margin-top: 20px; margin-bottom: 20px;">
-            <input type="radio" id="vor-einzug" name="einzug-auszug" value="Einzug">
-            <label for="vor-einzug" style="margin-right: 15px;">vor dem Einzug</label>
-    
-            <input type="radio" id="vor-auszug" name="einzug-auszug" value="Auszug">
-            <label for="vor-auszug">vor dem Auszug</label>
-        </div>
-    
-        <div class="input-group">
-            <label>Bei der Besichtigung der Wohnung am:</label>
-            <input type="date" id="besichtigungsdatum"> 
-        </div>
-        
-        <div class="radio-group" style="margin-top: 10px; margin-bottom: 40px;">
-            <label style="margin-right: 15px;">...wurden:</label>
-            <input type="radio" id="keine-maengel" name="maengel-status" value="keine">
-            <label for="keine-maengel" style="margin-right: 15px;">keine</label>
-    
-            <input type="radio" id="folgende-maengel" name="maengel-status" value="folgende">
-            <label for="folgende-maengel">folgende Mängel festgestellt:</label>
-        </div>
-    
         <div id="view-formular" class="form-container hidden">
             <h2 style="margin-bottom: 20px;">Kopfdaten</h2>
-            
+
             <div class="input-group">
                 <label>Name der/des Mieter(s):</label>
                 <input type="text" id="mietername" placeholder="z.B. Max Mustermann">
@@ -80,261 +38,36 @@
             <div class="input-group">
                 <label>Besichtigte Wohnung:</label>
                 <select id="gebaeude-auswahl">
-                    <option value="">Bitte Gebäude wählen...</option>
+                    <option value="" disabled selected>Bitte Gebäude wählen...</option>
                     <option value="dummy1">Musterstraße 1, 12345 Stadt</option>
                     <option value="dummy2">Beispielweg 10, 67890 Ort</option>
-                    </select>
-            </div>
-
-            <div class="radio-group" style="margin-top: 20px; margin-bottom: 30px;">
-                <input type="radio" id="vor-einzug" name="einzug-auszug" value="Einzug">
-                <label for="vor-einzug" style="margin-right: 15px;">vor dem Einzug</label>
-
-                <input type="radio" id="vor-auszug" name="einzug-auszug" value="Auszug">
-                <label for="vor-auszug">vor dem Auszug</label>
+                </select>
             </div>
 
             <div class="input-group">
                 <label>Bei der Besichtigung der Wohnung am:</label>
-                <input type="date" id="besichtigungsdatum"> 
+                <input type="date" id="besichtigungsdatum">
             </div>
-            
+
             <div class="radio-group" style="margin-top: 10px; margin-bottom: 40px;">
                 <label style="margin-right: 15px;">...wurden:</label>
                 <input type="radio" id="keine-maengel" name="maengel-status" value="keine">
                 <label for="keine-maengel" style="margin-right: 15px;">keine</label>
-        
+
                 <input type="radio" id="folgende-maengel" name="maengel-status" value="folgende">
                 <label for="folgende-maengel">folgende Mängel festgestellt:</label>
             </div>
-        
+
             <h3 style="margin-top: 40px; margin-bottom: 20px; color: var(--neon-green);">Zustand der Räume</h3>
-            
-            <div class="raum-karte">
-                <h4>1. Flur</h4>
-                <div class="radio-group" style="margin-bottom: 10px;">
-                    <input type="checkbox" id="flur-ok">
-                    <label for="flur-ok">In Ordnung (ja)</label>
-                </div>
-                <div class="input-group">
-                    <label>Folgende Mängel festgestellt:</label>
-                    <textarea id="flur-maengel" rows="2" placeholder="Mängel hier eintragen..."></textarea>
-                </div>
-                <div class="input-group">
-                    <label>Bemerkungen:</label>
-                    <textarea id="flur-bemerkungen" rows="2" placeholder="Sonstige Notizen..."></textarea>
-                </div>
-            </div>
 
-            <div class="raum-karte">
-                <h4>2. Küche</h4>
-                <div class="radio-group" style="margin-bottom: 10px;">
-                    <input type="checkbox" id="kueche-ok">
-                    <label for="kueche-ok">In Ordnung (ja)</label>
-                </div>
-                <div class="input-group">
-                    <label>Folgende Mängel festgestellt:</label>
-                    <textarea id="kueche-maengel" rows="2" placeholder="Mängel hier eintragen..."></textarea>
-                </div>
-                <div class="input-group">
-                    <label>Bemerkungen:</label>
-                    <textarea id="kueche-bemerkungen" rows="2" placeholder="Sonstige Notizen..."></textarea>
-                </div>
-            </div>
-            
-            <div class="raum-karte">
-                <h4>3. Bad</h4>
-                <div class="radio-group" style="margin-bottom: 10px;">
-                    <input type="checkbox" id="bad-ok">
-                    <label for="bad-ok">In Ordnung (ja)</label>
-                </div>
-                <div class="input-group">
-                    <label>Folgende Mängel festgestellt:</label>
-                    <textarea id="bad-maengel" rows="2" placeholder="Mängel hier eintragen..."></textarea>
-                </div>
-                <div class="input-group">
-                    <label>Bemerkungen:</label>
-                    <textarea id="bad-bemerkungen" rows="2" placeholder="Sonstige Notizen..."></textarea>
-                </div>
-            </div>
-            
-            <div class="raum-karte">
-                <h4>4. Wohnzimmer</h4>
-                <div class="radio-group" style="margin-bottom: 10px;">
-                    <input type="checkbox" id="wohnzimmer-ok">
-                    <label for="wohnzimmer-ok">In Ordnung (ja)</label>
-                </div>
-                <div class="input-group">
-                    <label>Folgende Mängel festgestellt:</label>
-                    <textarea id="wohnzimmer-maengel" rows="2" placeholder="Mängel hier eintragen..."></textarea>
-                </div>
-                <div class="input-group">
-                    <label>Bemerkungen:</label>
-                    <textarea id="wohnzimmer-bemerkungen" rows="2" placeholder="Sonstige Notizen..."></textarea>
-                </div>
-            </div>
-            
-            <div class="raum-karte">
-                <h4>5. Balkon</h4>
-                <div class="radio-group" style="margin-bottom: 10px;">
-                    <input type="checkbox" id="balkon-ok">
-                    <label for="balkon-ok">In Ordnung (ja)</label>
-                </div>
-                <div class="input-group">
-                    <label>Folgende Mängel festgestellt:</label>
-                    <textarea id="balkon-maengel" rows="2" placeholder="Mängel hier eintragen..."></textarea>
-                </div>
-                <div class="input-group">
-                    <label>Bemerkungen:</label>
-                    <textarea id="balkon-bemerkungen" rows="2" placeholder="Sonstige Notizen..."></textarea>
-                </div>
-            </div>
+            <div id="rooms-container"></div>
 
-            <div class="raum-karte">
-                <h4>6. Büro</h4>
-                <div class="radio-group" style="margin-bottom: 10px;">
-                    <input type="checkbox" id="buero-ok">
-                    <label for="buero-ok">In Ordnung (ja)</label>
-                </div>
-                <div class="input-group">
-                    <label>Folgende Mängel festgestellt:</label>
-                    <textarea id="buero-maengel" rows="2" placeholder="Mängel hier eintragen..."></textarea>
-                </div>
-                <div class="input-group">
-                    <label>Bemerkungen:</label>
-                    <textarea id="buero-bemerkungen" rows="2" placeholder="Sonstige Notizen..."></textarea>
-                </div>
-            </div>
-            
-            <div class="raum-karte">
-                <h4>7. Schlafzimmer</h4>
-                <div class="radio-group" style="margin-bottom: 10px;">
-                    <input type="checkbox" id="schlafzimmer-ok">
-                    <label for="schlafzimmer-ok">In Ordnung (ja)</label>
-                </div>
-                <div class="input-group">
-                    <label>Folgende Mängel festgestellt:</label>
-                    <textarea id="schlafzimmer-maengel" rows="2" placeholder="Mängel hier eintragen..."></textarea>
-                </div>
-                <div class="input-group">
-                    <label>Bemerkungen:</label>
-                    <textarea id="schlafzimmer-bemerkungen" rows="2" placeholder="Sonstige Notizen..."></textarea>
-                </div>
-            </div>
-            
-            <div class="raum-karte">
-                <h4>8. Kinderzimmer</h4>
-                <div class="radio-group" style="margin-bottom: 10px;">
-                    <input type="checkbox" id="kinderzimmer-ok">
-                    <label for="kinderzimmer-ok">In Ordnung (ja)</label>
-                </div>
-                <div class="input-group">
-                    <label>Folgende Mängel festgestellt:</label>
-                    <textarea id="kinderzimmer-maengel" rows="2" placeholder="Mängel hier eintragen..."></textarea>
-                </div>
-                <div class="input-group">
-                    <label>Bemerkungen:</label>
-                    <textarea id="kinderzimmer-bemerkungen" rows="2" placeholder="Sonstige Notizen..."></textarea>
-                </div>
-            </div>
+            <div id="meters-container"></div>
 
-            <div class="raum-karte">
-                <h4>9. Weitere Räume 1</h4>
-                <div class="radio-group" style="margin-bottom: 10px;">
-                    <input type="checkbox" id="weitere1-ok">
-                    <label for="weitere1-ok">In Ordnung (ja)</label>
-                </div>
-                <div class="input-group">
-                    <label>Folgende Mängel festgestellt:</label>
-                    <textarea id="weitere1-maengel" rows="2" placeholder="Mängel hier eintragen..."></textarea>
-                </div>
-                <div class="input-group">
-                    <label>Bemerkungen:</label>
-                    <textarea id="weitere1-bemerkungen" rows="2" placeholder="Welcher Raum? Sonstige Notizen..."></textarea>
-                </div>
-            </div>
-            
-            <div class="raum-karte">
-                <h4>10. Weitere Räume 2</h4>
-                <div class="radio-group" style="margin-bottom: 10px;">
-                    <input type="checkbox" id="weitere2-ok">
-                    <label for="weitere2-ok">In Ordnung (ja)</label>
-                </div>
-                <div class="input-group">
-                    <label>Folgende Mängel festgestellt:</label>
-                    <textarea id="weitere2-maengel" rows="2" placeholder="Mängel hier eintragen..."></textarea>
-                </div>
-                <div class="input-group">
-                    <label>Bemerkungen:</label>
-                    <textarea id="weitere2-bemerkungen" rows="2" placeholder="Welcher Raum? Sonstige Notizen..."></textarea>
-                </div>
-            </div>
-            
-            <div class="raum-karte">
-                <h4>11. Keller</h4>
-                <div class="radio-group" style="margin-bottom: 10px;">
-                    <input type="checkbox" id="keller-ok">
-                    <label for="keller-ok">In Ordnung (ja)</label>
-                </div>
-                <div class="input-group">
-                    <label>Folgende Mängel festgestellt:</label>
-                    <textarea id="keller-maengel" rows="2" placeholder="Mängel hier eintragen..."></textarea>
-                </div>
-                <div class="input-group">
-                    <label>Bemerkungen:</label>
-                    <textarea id="keller-bemerkungen" rows="2" placeholder="Sonstige Notizen..."></textarea>
-                </div>
-            </div>
-            
-            <div class="raum-karte">
-                <h4>12. Garage</h4>
-                <div class="radio-group" style="margin-bottom: 10px;">
-                    <input type="checkbox" id="garage-ok">
-                    <label for="garage-ok">In Ordnung (ja)</label>
-                </div>
-                <div class="input-group">
-                    <label>Folgende Mängel festgestellt:</label>
-                    <textarea id="garage-maengel" rows="2" placeholder="Mängel hier eintragen..."></textarea>
-                </div>
-                <div class="input-group">
-                    <label>Bemerkungen:</label>
-                    <textarea id="garage-bemerkungen" rows="2" placeholder="Sonstige Notizen..."></textarea>
-                </div>
-            </div>
-            
-            <button class="main-btn" style="border-color: #ff3333; margin-top: 30px;" onclick="location.reload()">Neustart (Abbrechen)</button>
+            <button class="main-btn" id="btn-neustart" style="border-color: #ff3333; margin-top: 30px;">Neustart (Abbrechen)</button>
         </div>
     </main>
 
-    <script>
-        // Schritt 1: Objektart auswählen
-        function selectObjekt(objektArt) {
-            // 1. Im Local Storage speichern
-            localStorage.setItem('kithan_aktuelle_objektart', objektArt);
-    
-            // 2. Ansicht 1 (Objektart) ausblenden
-            document.getElementById('view-objektart')?.classList.add('hidden');
-    
-            // 3. Ansicht 2 (Protokollart) einblenden
-            document.getElementById('view-protokollart')?.classList.remove('hidden');
-    
-            // 4. Dem Nutzer anzeigen, was er gerade gewählt hat (z.B. "Garage")
-            const ueberschrift = document.getElementById('gewaehlte-objektart');
-            if (ueberschrift) {
-                ueberschrift.innerText = "Gewählt: " + objektArt;
-            }
-        }
-    
-        // Schritt 2: Protokollart auswählen und Formular öffnen
-        function selectProtokoll(protokollArt) {
-            // 1. Im Local Storage speichern
-            localStorage.setItem('kithan_aktuelle_protokollart', protokollArt);
-    
-            // 2. Ansicht 2 (Protokollart) ausblenden
-            document.getElementById('view-protokollart')?.classList.add('hidden');
-    
-            // 3. Ansicht 3 (Das Formular) einblenden
-            document.getElementById('view-formular')?.classList.remove('hidden');
-        }
-
-    
+    <script src="dist/app.js"></script>
+</body>
+</html>

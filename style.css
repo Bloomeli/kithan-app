@@ -4,6 +4,15 @@
     --text-color: #ffffff;
     --neon-green: #39FF14;
     --dark-gray: #1e1e1e;
+    --danger-red: #ff3333;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html, body {
+    overflow-x: hidden;
 }
 
 body {
@@ -11,16 +20,16 @@ body {
     color: var(--text-color);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     margin: 0;
-    padding: 0;
+    padding: 20px 16px;
+    min-height: 100vh;
     display: flex;
     justify-content: center;
     align-items: center;
-    height: 100vh;
 }
 
 .dashboard-container {
     text-align: center;
-    width: 90%;
+    width: 100%;
     max-width: 400px;
 }
 
@@ -99,4 +108,162 @@ body {
 .input-group textarea:focus {
     outline: none;
     border-color: var(--neon-green);
+}
+
+.hidden {
+    display: none !important;
+}
+
+.input-group {
+    margin-bottom: 15px;
+    text-align: left;
+}
+
+.input-group label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 0.95rem;
+}
+
+.input-group input[type="text"],
+.input-group input[type="date"],
+.input-group select {
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    border: 1px solid #555;
+    border-radius: 5px;
+    padding: 12px;
+    font-size: 1rem;
+    font-family: inherit;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.input-group input[type="text"]:focus,
+.input-group input[type="date"]:focus,
+.input-group select:focus {
+    outline: none;
+    border-color: var(--neon-green);
+}
+
+.radio-group {
+    text-align: left;
+}
+
+.radio-group input[type="checkbox"],
+.radio-group input[type="radio"] {
+    accent-color: var(--neon-green);
+    width: 18px;
+    height: 18px;
+    vertical-align: middle;
+    margin-right: 6px;
+}
+
+.form-container {
+    width: 100%;
+    text-align: left;
+}
+
+/* Tablet und größere Bildschirme: Container darf breiter werden,
+   bleibt aber auf eine gut lesbare Breite begrenzt. */
+@media (min-width: 600px) {
+    .dashboard-container {
+        max-width: 600px;
+    }
+}
+
+@media (min-width: 900px) {
+    .dashboard-container {
+        max-width: 760px;
+    }
+}
+
+@media (min-width: 1200px) {
+    .dashboard-container {
+        max-width: 900px;
+    }
+}
+
+/* Landscape auf kleinen Geräten: wenig Höhe, daher am oberen Rand ausrichten statt zentrieren */
+@media (max-height: 500px) and (orientation: landscape) {
+    body {
+        align-items: flex-start;
+    }
+}
+
+/* --- Zählerstände ------------------------------------------------------- */
+
+.section-title {
+    margin-top: 40px;
+    margin-bottom: 20px;
+    color: var(--neon-green);
+    font-size: 1.15rem;
+}
+
+.meter-section {
+    margin-bottom: 30px;
+}
+
+.meter-section-title {
+    margin-top: 0;
+    margin-bottom: 15px;
+    font-size: 1rem;
+    color: var(--text-color);
+    border-bottom: 1px solid #333;
+    padding-bottom: 8px;
+}
+
+.meter-karte {
+    margin-bottom: 15px;
+}
+
+/* Zusammengehörige Felder (z.B. HT/NT, Zählernummer/Zählerstand):
+   auf schmalen Bildschirmen einspaltig, auf breiteren zweispaltig. */
+.field-grid-2 {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+}
+
+@media (min-width: 600px) {
+    .field-grid-2 {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+.btn-add,
+.btn-remove {
+    display: block;
+    width: 100%;
+    background-color: var(--dark-gray);
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 0.95rem;
+    font-weight: bold;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.btn-add {
+    color: var(--neon-green);
+    border: 2px solid var(--neon-green);
+    margin-top: 5px;
+    margin-bottom: 10px;
+}
+
+.btn-add:active {
+    background-color: var(--neon-green);
+    color: var(--bg-color);
+}
+
+.btn-remove {
+    color: var(--danger-red);
+    border: 1px solid var(--danger-red);
+    margin-top: 10px;
+}
+
+.btn-remove:active {
+    background-color: var(--danger-red);
+    color: var(--text-color);
 }
