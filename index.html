@@ -11,63 +11,103 @@
     <main class="dashboard-container">
         <div class="logo-area">
             <h1><span class="highlight">K</span>ithan App</h1>
-            <p>Abnahme & Übergabe Protokolle</p>
+            <p id="app-subtitle">Übergabe & Rücknahme Protokolle</p>
         </div>
 
         <div id="view-objektart" class="button-grid">
             <button class="main-btn" data-objektart="gewerbe">Gewerbe</button>
             <button class="main-btn" data-objektart="privat">Privat</button>
             <button class="main-btn" data-objektart="garage">Garage</button>
+            <button class="main-btn" data-objektart="schluessel">Schlüssel</button>
+            <button class="main-btn btn-drafts" id="btn-meine-entwuerfe" type="button">Meine Entwürfe</button>
         </div>
 
         <div id="view-protokollart" class="button-grid hidden">
             <h2 style="margin-bottom: 20px; font-size: 1.2rem;" id="gewaehlte-objektart"></h2>
-            <button class="main-btn" data-protokollart="abnahme">Abnahme</button>
             <button class="main-btn" data-protokollart="uebergabe">Übergabe</button>
-            <button class="main-btn" id="btn-zurueck" style="border-color: #ff3333; margin-top: 20px;">Zurück</button>
+            <button class="main-btn" data-protokollart="ruecknahme">Rücknahme</button>
+            <button class="main-btn btn-back" id="btn-zurueck">Zurück</button>
+        </div>
+
+        <div id="view-entwuerfe" class="form-container hidden">
+            <h2 class="section-title" style="margin-top: 0;">Meine Entwürfe</h2>
+            <p id="entwuerfe-empty" class="draft-empty hidden">Keine gespeicherten Entwürfe.</p>
+            <div id="entwuerfe-list"></div>
+            <button class="main-btn btn-back" id="btn-zurueck-entwuerfe" type="button">Zurück</button>
         </div>
 
         <div id="view-formular" class="form-container hidden">
-            <h2 style="margin-bottom: 20px;">Kopfdaten</h2>
+            <div id="form-standard">
+                <h2 style="margin-bottom: 20px;">Kopfdaten</h2>
 
-            <div class="input-group">
-                <label>Name der/des Mieter(s):</label>
-                <input type="text" id="mietername" placeholder="z.B. Max Mustermann">
+                <div class="input-group">
+                    <label>Name der/des Mieter(s):</label>
+                    <input type="text" id="mietername" placeholder="z.B. Max Mustermann">
+                </div>
+
+                <div class="input-group">
+                    <label id="label-besichtigt">Wohnung/Einheit:</label>
+                    <select id="gebaeude-auswahl">
+                        <option value="" disabled selected>Bitte Gebäude wählen...</option>
+                        <option value="dummy1">Musterstraße 1, 12345 Stadt</option>
+                        <option value="dummy2">Beispielweg 10, 67890 Ort</option>
+                    </select>
+                </div>
+
+                <div class="input-group">
+                    <label id="label-besichtigungsdatum">Datum der Übergabe</label>
+                    <input type="date" id="besichtigungsdatum">
+                </div>
+
+                <div class="radio-group" style="margin-top: 10px; margin-bottom: 40px;">
+                    <label style="margin-right: 15px;">...wurden:</label>
+                    <input type="radio" id="keine-maengel" name="maengel-status" value="keine">
+                    <label for="keine-maengel" style="margin-right: 15px;">keine</label>
+
+                    <input type="radio" id="folgende-maengel" name="maengel-status" value="folgende">
+                    <label for="folgende-maengel">folgende Mängel festgestellt:</label>
+                </div>
+
+                <h3 id="heading-raeume" style="margin-top: 40px; margin-bottom: 20px; color: var(--neon-green);">Zustand der Räume</h3>
+
+                <div id="rooms-container"></div>
+
+                <div id="meters-container"></div>
+
+                <div id="closing-container"></div>
+
+                <div id="signature-container"></div>
             </div>
 
-            <div class="input-group">
-                <label>Besichtigte Wohnung:</label>
-                <select id="gebaeude-auswahl">
-                    <option value="" disabled selected>Bitte Gebäude wählen...</option>
-                    <option value="dummy1">Musterstraße 1, 12345 Stadt</option>
-                    <option value="dummy2">Beispielweg 10, 67890 Ort</option>
-                </select>
+            <div id="form-schluessel" class="hidden">
+                <h2 style="margin-bottom: 20px;">Schlüssel</h2>
+
+                <div class="input-group">
+                    <label for="schluessel-mietername">Name des Mieters:</label>
+                    <input type="text" id="schluessel-mietername" placeholder="z.B. Max Mustermann">
+                </div>
+
+                <div class="input-group">
+                    <label for="schluessel-wohnung">Wohnung/Einheit:</label>
+                    <input type="text" id="schluessel-wohnung" placeholder="z.B. Musterstraße 1">
+                </div>
+
+                <div id="schluessel-entries-container"></div>
+
+                <div class="input-group">
+                    <label for="schluessel-bemerkungen">Sonstiges/Bemerkungen</label>
+                    <textarea id="schluessel-bemerkungen" rows="3" placeholder="Weitere Hinweise oder Anmerkungen..."></textarea>
+                </div>
             </div>
 
-            <div class="input-group">
-                <label>Bei der Besichtigung der Wohnung am:</label>
-                <input type="date" id="besichtigungsdatum">
-            </div>
+            <p id="draft-status" class="draft-status hidden" role="status"></p>
 
-            <div class="radio-group" style="margin-top: 10px; margin-bottom: 40px;">
-                <label style="margin-right: 15px;">...wurden:</label>
-                <input type="radio" id="keine-maengel" name="maengel-status" value="keine">
-                <label for="keine-maengel" style="margin-right: 15px;">keine</label>
-
-                <input type="radio" id="folgende-maengel" name="maengel-status" value="folgende">
-                <label for="folgende-maengel">folgende Mängel festgestellt:</label>
-            </div>
-
-            <h3 style="margin-top: 40px; margin-bottom: 20px; color: var(--neon-green);">Zustand der Räume</h3>
-
-            <div id="rooms-container"></div>
-
-            <div id="meters-container"></div>
-
-            <button class="main-btn" id="btn-neustart" style="border-color: #ff3333; margin-top: 30px;">Neustart (Abbrechen)</button>
+            <button class="main-btn btn-save-draft" id="btn-entwurf-speichern" type="button">Als Entwurf speichern</button>
+            <button class="main-btn btn-back" id="btn-zurueck-formular" type="button">Zurück</button>
+            <button class="main-btn" id="btn-neustart" type="button" style="border-color: #ff3333; margin-top: 12px;">Neustart (Abbrechen)</button>
         </div>
     </main>
 
-    <script src="dist/app.js"></script>
+    <script type="module" src="/src/app.ts"></script>
 </body>
 </html>

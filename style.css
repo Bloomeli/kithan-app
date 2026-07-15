@@ -44,10 +44,19 @@ body {
     font-size: 3rem;
 }
 
-.logo-area p {
+.logo-area p,
+#app-subtitle {
     color: #a0a0a0;
     margin-bottom: 40px;
     font-size: 0.9rem;
+}
+
+#app-subtitle.is-protokollart {
+    color: var(--text-color);
+    font-size: 1.6rem;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+    margin-bottom: 28px;
 }
 
 .button-grid {
@@ -150,6 +159,10 @@ body {
     text-align: left;
 }
 
+.room-ok-row {
+    margin: 4px 0 12px;
+}
+
 .radio-group input[type="checkbox"],
 .radio-group input[type="radio"] {
     accent-color: var(--neon-green);
@@ -217,6 +230,125 @@ body {
     margin-bottom: 15px;
 }
 
+/* --- Abschluss / Schlüsselübergabe -------------------------------------- */
+
+#closing-container > .input-group:first-child {
+    margin-top: 40px;
+}
+
+.schluessel-entry-card {
+    margin-bottom: 12px;
+}
+
+.schluessel-entry-title {
+    margin: 0 0 12px;
+    font-size: 1rem;
+    color: var(--text-color);
+    border-bottom: 1px solid #333;
+    padding-bottom: 8px;
+}
+
+.key-handover-block,
+.key-handover-extras {
+    margin-bottom: 16px;
+}
+
+.key-handover-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+    margin-bottom: 16px;
+    padding: 14px;
+    background-color: var(--dark-gray);
+    border: 1px solid #333;
+    border-radius: 8px;
+    line-height: 1.5;
+}
+
+.key-handover-text {
+    color: var(--text-color);
+    font-size: 0.95rem;
+}
+
+.key-handover-anzahl {
+    width: auto;
+    min-width: 4.5rem;
+    flex: 0 0 auto;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    border: 1px solid #555;
+    border-radius: 5px;
+    padding: 10px;
+    font-size: 1rem;
+    font-family: inherit;
+}
+
+.key-handover-anlagennummer,
+.key-handover-ziel {
+    flex: 1 1 8rem;
+    min-width: 7rem;
+    max-width: 14rem;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    border: 1px solid #555;
+    border-radius: 5px;
+    padding: 10px;
+    font-size: 1rem;
+    font-family: inherit;
+    box-sizing: border-box;
+}
+
+.key-handover-anzahl:focus,
+.key-handover-anlagennummer:focus,
+.key-handover-ziel:focus {
+    outline: none;
+    border-color: var(--neon-green);
+}
+
+.key-handover-line .btn-remove {
+    flex: 1 1 100%;
+    margin-top: 4px;
+}
+
+/* --- Unterschriften ----------------------------------------------------- */
+
+.signature-block {
+    margin-bottom: 24px;
+}
+
+.signature-block-title {
+    margin: 0 0 10px;
+    font-size: 1rem;
+    color: var(--text-color);
+    border-bottom: 1px solid #333;
+    padding-bottom: 8px;
+}
+
+.signature-pad-wrap {
+    background-color: #ffffff;
+    border: 1px solid #555;
+    border-radius: 8px;
+    overflow: hidden;
+    touch-action: none;
+    margin-bottom: 10px;
+}
+
+.signature-pad-wrap canvas {
+    display: block;
+    width: 100%;
+    height: 160px;
+    cursor: crosshair;
+    touch-action: none;
+}
+
+.btn-finish-pdf {
+    border-color: var(--neon-green);
+    color: var(--neon-green);
+    margin-top: 24px;
+    margin-bottom: 8px;
+}
+
 /* Zusammengehörige Felder (z.B. HT/NT, Zählernummer/Zählerstand):
    auf schmalen Bildschirmen einspaltig, auf breiteren zweispaltig. */
 .field-grid-2 {
@@ -257,6 +389,11 @@ body {
     color: var(--bg-color);
 }
 
+.btn-back {
+    border-color: var(--danger-red);
+    margin-top: 20px;
+}
+
 .btn-remove {
     color: var(--danger-red);
     border: 1px solid var(--danger-red);
@@ -266,4 +403,74 @@ body {
 .btn-remove:active {
     background-color: var(--danger-red);
     color: var(--text-color);
+}
+
+.btn-drafts {
+    margin-top: 10px;
+    border-color: var(--neon-green);
+    font-size: 1rem;
+}
+
+.btn-save-draft {
+    border-color: var(--neon-green);
+    margin-top: 30px;
+    margin-bottom: 12px;
+}
+
+.draft-status {
+    text-align: left;
+    margin: 16px 0 0;
+    padding: 12px;
+    border-radius: 8px;
+    border: 1px solid var(--neon-green);
+    color: var(--neon-green);
+    font-size: 0.95rem;
+}
+
+.draft-status.is-error {
+    border-color: var(--danger-red);
+    color: var(--danger-red);
+}
+
+.draft-empty {
+    color: #a0a0a0;
+    text-align: left;
+    margin-bottom: 20px;
+}
+
+.draft-card {
+    background-color: var(--dark-gray);
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 15px;
+    text-align: left;
+}
+
+.draft-card-title {
+    margin: 0 0 6px;
+    color: var(--neon-green);
+    font-size: 1.05rem;
+}
+
+.draft-card-meta {
+    margin: 0 0 12px;
+    color: #a0a0a0;
+    font-size: 0.9rem;
+}
+
+.draft-card-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+
+.draft-card-actions .main-btn {
+    padding: 12px;
+    font-size: 0.95rem;
+    margin: 0;
+}
+
+.draft-card-actions .btn-delete-draft {
+    border-color: var(--danger-red);
 }
