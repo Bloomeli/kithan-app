@@ -240,13 +240,19 @@ body {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    justify-content: space-between;
-    gap: 10px 16px;
+    justify-content: flex-start;
+    gap: 10px 1.25rem;
 }
 
 .room-ok-media-row .room-ok-row {
     flex: 1 1 auto;
     min-width: 10rem;
+}
+
+/* Foto/Video etwas vom rechten Rand nach innen/zur Mitte. */
+.room-ok-media-row .card-media-actions {
+    margin-left: auto;
+    margin-right: 1.5rem;
 }
 
 .room-ok-media-block .media-thumb-list {
@@ -259,6 +265,15 @@ body {
     gap: 10px;
 }
 
+.card-media--meter {
+    margin: 0 0 12px;
+}
+
+.card-media--meter .card-media-actions {
+    justify-content: flex-start;
+    margin-right: 1.5rem;
+}
+
 /* Zähler: Titel + Foto/Video in einer Zeile (wie bei Räumen). */
 .meter-media-header {
     margin: 0 0 12px;
@@ -268,8 +283,8 @@ body {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    justify-content: space-between;
-    gap: 10px 16px;
+    justify-content: flex-start;
+    gap: 10px 1.25rem;
 }
 
 .meter-media-row h4 {
@@ -278,6 +293,11 @@ body {
     min-width: 0;
     color: var(--neon-green);
     font-size: 1.1rem;
+}
+
+.meter-media-row .card-media-actions {
+    margin-left: auto;
+    margin-right: 1.5rem;
 }
 
 .meter-media-header .media-thumb-list {
@@ -341,11 +361,21 @@ body {
     height: 140px;
 }
 
+.media-thumb-item--photo {
+    width: 72px;
+    height: 72px;
+}
+
 .media-thumb {
     display: block;
     width: 100%;
     height: 100%;
     object-fit: cover;
+}
+
+.media-thumb--photo {
+    object-fit: cover;
+    background-color: #222;
 }
 
 .media-thumb--video {
@@ -509,7 +539,24 @@ body {
 
 .meter-karte {
     margin-bottom: 15px;
-    padding: 15px;
+    padding: 0;
+}
+
+.meter-card-footer {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.meter-card-footer--confirm-only {
+    grid-template-columns: 1fr;
+}
+
+.meter-card-footer .meter-footer-btn {
+    width: 100%;
+    margin-top: 0;
+    margin-bottom: 0;
 }
 
 /* --- Abschluss / Schlüsselübergabe -------------------------------------- */

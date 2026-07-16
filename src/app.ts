@@ -2,7 +2,7 @@
 // Ablauf: Objektart wählen -> Protokollart wählen -> Formular (Kopfdaten + Räume)
 
 import { SignaturePad } from "./signaturePad";
-import { createMeterMediaHeader, createRoomOkMediaRow } from "./cardMedia";
+import { createCardMediaControls, createRoomOkMediaRow } from "./cardMedia";
 import { deleteMediaForOwner, deleteMediaForSession } from "./mediaStore";
 import {
   generateAndDownloadProtocolPdf,
@@ -1020,9 +1020,12 @@ function renderRooms(objektart: Objektart): void {
   renderPrivatRooms(draft);
 }
 
-function createCollapsibleRoomCard(title: string): { card: HTMLDivElement; body: HTMLDivElement } {
+function createCollapsibleRoomCard(
+  title: string,
+  extraClass = ""
+): { card: HTMLDivElement; body: HTMLDivElement; collapse: () => void } {
   const card = document.createElement("div");
-  card.className = "raum-karte";
+  card.className = extraClass ? `raum-karte ${extraClass}` : "raum-karte";
 
   const header = document.createElement("div");
   header.className = "raum-karte-header";
@@ -1052,14 +1055,19 @@ function createCollapsibleRoomCard(title: string): { card: HTMLDivElement; body:
     const collapsed = card.classList.toggle("is-collapsed");
     toggleButton.setAttribute("aria-expanded", String(!collapsed));
   };
-  toggleButton.addEventListener("click", toggle);
-  header.addEventListener("click", (event) => {
-    if (event.target !== toggleButton && !toggleButton.contains(event.target as Node)) {
-      toggle();
-    }
+  const collapse = (): void => {
+    card.classList.add("is-collapsed");
+    toggleButton.setAttribute("aria-expanded", "false");
+  };
+  toggleButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggle();
+  });
+  header.addEventListener("click", () => {
+    toggle();
   });
 
-  return { card, body };
+  return { card, body, collapse };
 }
 
 function createStaticRoomCard(raum: RaumConfig, number: number, roomDraft: RoomDraft): HTMLDivElement {
@@ -1584,23 +1592,43 @@ function createRemoveButton(onClick: () => void): HTMLButtonElement {
   return button;
 }
 
+function createMeterFooter(
+  showRemove: boolean,
+  onRemove: () => void,
+  onConfirm: () => void
+): HTMLDivElement {
+  const footer = document.createElement("div");
+  footer.className = showRemove ? "meter-card-footer" : "meter-card-footer meter-card-footer--confirm-only";
+
+  if (showRemove) {
+    const removeButton = createRemoveButton(onRemove);
+    removeButton.classList.add("meter-footer-btn");
+    footer.appendChild(removeButton);
+  }
+
+  const anlegenButton = document.createElement("button");
+  anlegenButton.type = "button";
+  anlegenButton.className = "btn-add meter-footer-btn meter-footer-anlegen";
+  anlegenButton.textContent = "Anlegen";
+  anlegenButton.addEventListener("click", onConfirm);
+  footer.appendChild(anlegenButton);
+
+  return footer;
+}
+
 function createElectricityCard(
   entry: ElectricityMeterEntry,
   index: number,
   showRemove: boolean,
   onRemove: () => void
 ): HTMLDivElement {
-  const card = document.createElement("div");
-  card.className = "raum-karte meter-karte";
+  const { card, body, collapse } = createCollapsibleRoomCard(`Stromzähler ${index + 1}`, "meter-karte");
 
-  const { root: mediaHeader } = createMeterMediaHeader(
-    `Stromzähler ${index + 1}`,
-    getMediaSessionKey,
-    entry.id
-  );
-  card.appendChild(mediaHeader);
+  const media = createCardMediaControls(getMediaSessionKey, entry.id);
+  media.root.classList.add("card-media--meter");
+  body.appendChild(media.root);
 
-  card.appendChild(
+  body.appendChild(
     createTextField(`${entry.id}-nummer`, "Zählernummer:", entry.meterNumber, "text", (value) => {
       entry.meterNumber = value;
       persistMeters();
@@ -1621,9 +1649,9 @@ function createElectricityCard(
       persistMeters();
     })
   );
-  card.appendChild(grid);
+  body.appendChild(grid);
 
-  card.appendChild(
+  body.appendChild(
     createTextareaField(
       `${entry.id}-bemerkungen`,
       "Bemerkungen (optional):",
@@ -1636,9 +1664,7 @@ function createElectricityCard(
     )
   );
 
-  if (showRemove) {
-    card.appendChild(createRemoveButton(onRemove));
-  }
+  body.appendChild(createMeterFooter(showRemove, onRemove, collapse));
 
   return card;
 }
@@ -1684,18 +1710,17 @@ function createStandardMeterCard(
   showRemove: boolean,
   onRemove: () => void
 ): HTMLDivElement {
-  const card = document.createElement("div");
-  card.className = "raum-karte meter-karte";
-
-  const { root: mediaHeader } = createMeterMediaHeader(
+  const { card, body, collapse } = createCollapsibleRoomCard(
     `${config.title} ${index + 1}`,
-    getMediaSessionKey,
-    entry.id
+    "meter-karte"
   );
-  card.appendChild(mediaHeader);
+
+  const media = createCardMediaControls(getMediaSessionKey, entry.id);
+  media.root.classList.add("card-media--meter");
+  body.appendChild(media.root);
 
   if (config.withLocation) {
-    card.appendChild(
+    body.appendChild(
       createTextField(
         `${entry.id}-standort`,
         "Bezeichnung/Standort:",
@@ -1724,9 +1749,9 @@ function createStandardMeterCard(
       persistMeters();
     })
   );
-  card.appendChild(grid);
+  body.appendChild(grid);
 
-  card.appendChild(
+  body.appendChild(
     createTextareaField(
       `${entry.id}-bemerkungen`,
       "Bemerkungen (optional):",
@@ -1739,9 +1764,7 @@ function createStandardMeterCard(
     )
   );
 
-  if (showRemove) {
-    card.appendChild(createRemoveButton(onRemove));
-  }
+  body.appendChild(createMeterFooter(showRemove, onRemove, collapse));
 
   return card;
 }

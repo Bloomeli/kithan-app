@@ -18,6 +18,10 @@ function createCaptureInput(kind: MediaKind): HTMLInputElement {
   return input;
 }
 
+function isVideoRecord(record: MediaRecord): boolean {
+  return record.kind === "video" || record.mimeType.startsWith("video/");
+}
+
 function createThumbnailItem(
   record: MediaRecord,
   objectUrl: string,
@@ -26,13 +30,7 @@ function createThumbnailItem(
   const item = document.createElement("div");
   item.className = "media-thumb-item";
 
-  if (record.kind === "photo") {
-    const img = document.createElement("img");
-    img.className = "media-thumb";
-    img.src = objectUrl;
-    img.alt = "Foto-Vorschau";
-    item.appendChild(img);
-  } else {
+  if (isVideoRecord(record)) {
     item.classList.add("media-thumb-item--video");
 
     const video = document.createElement("video");
@@ -69,6 +67,18 @@ function createThumbnailItem(
     badge.className = "media-thumb-badge";
     badge.textContent = "Video";
     item.appendChild(badge);
+  } else {
+    item.classList.add("media-thumb-item--photo");
+
+    const img = document.createElement("img");
+    img.className = "media-thumb media-thumb--photo";
+    img.src = objectUrl;
+    img.alt = "Foto-Vorschau";
+    // Help browsers pick the right decoder when the blob type is empty.
+    if (record.mimeType.startsWith("image/")) {
+      img.setAttribute("data-mime", record.mimeType);
+    }
+    item.appendChild(img);
   }
 
   const removeButton = document.createElement("button");
@@ -281,42 +291,4 @@ export function createRoomOkMediaRow(
   );
 
   return { row: block, media: { root: block, reload } };
-}
-
-/** Meter card header: title + Foto/Video inline, thumbnails below. */
-export function createMeterMediaHeader(
-  title: string,
-  getSessionKey: () => string | null,
-  ownerKey: string
-): { root: HTMLDivElement; media: CardMediaControls } {
-  const block = document.createElement("div");
-  block.className = "meter-media-header";
-
-  const row = document.createElement("div");
-  row.className = "meter-media-row";
-
-  const heading = document.createElement("h4");
-  heading.textContent = title;
-  row.appendChild(heading);
-
-  const { actions, photoButton, videoButton, photoInput, videoInput } = createMediaActionButtons();
-  row.appendChild(actions);
-
-  const thumbs = document.createElement("div");
-  thumbs.className = "media-thumb-list";
-
-  block.append(row, thumbs);
-
-  const reload = bindMediaControls(
-    ownerKey,
-    getSessionKey,
-    actions,
-    thumbs,
-    photoButton,
-    videoButton,
-    photoInput,
-    videoInput
-  );
-
-  return { root: block, media: { root: block, reload } };
 }
