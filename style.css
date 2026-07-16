@@ -310,6 +310,20 @@ body {
     gap: 2.75rem;
 }
 
+.media-capture-error {
+    margin: 8px 0 0;
+    padding: 10px 12px;
+    border: 1px solid var(--neon-purple);
+    border-radius: 6px;
+    color: var(--neon-purple);
+    background-color: rgba(224, 64, 251, 0.08);
+    font-size: 0.9rem;
+    line-height: 1.35;
+    text-align: left;
+    width: 100%;
+    box-sizing: border-box;
+}
+
 .btn-media {
     flex: 0 0 auto;
     min-width: 3.25rem;

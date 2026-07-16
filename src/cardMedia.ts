@@ -264,6 +264,45 @@ function bindMediaControls(
   photoInput: HTMLInputElement,
   videoInput: HTMLInputElement
 ): () => Promise<void> {
+  const MEDIA_STORAGE_FULL_MESSAGE =
+    "Speichern fehlgeschlagen – möglicherweise ist der Gerätespeicher voll. Bitte Speicherplatz freigeben und erneut versuchen.";
+  const MEDIA_SAVE_FAILED_MESSAGE = "Speichern fehlgeschlagen. Bitte erneut versuchen.";
+
+  const errorEl = document.createElement("p");
+  errorEl.className = "media-capture-error hidden";
+  errorEl.setAttribute("role", "alert");
+  if (thumbs.parentElement) {
+    thumbs.parentElement.insertBefore(errorEl, thumbs);
+  } else {
+    actions.insertAdjacentElement("afterend", errorEl);
+  }
+
+  const showCaptureError = (error: unknown): void => {
+    console.error(error);
+    const name =
+      error && typeof error === "object" && "name" in error
+        ? String((error as { name: string }).name)
+        : "";
+    const message =
+      error && typeof error === "object" && "message" in error
+        ? String((error as { message: string }).message)
+        : "";
+    const isQuota =
+      name === "QuotaExceededError" ||
+      name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+      /quota|speicherlimit|storage/i.test(`${name} ${message}`);
+    const isIdbWrite =
+      /IndexedDB|IDB|transaction|QuotaExceeded/i.test(`${name} ${message}`);
+    errorEl.textContent =
+      isQuota || isIdbWrite ? MEDIA_STORAGE_FULL_MESSAGE : MEDIA_SAVE_FAILED_MESSAGE;
+    errorEl.classList.remove("hidden");
+  };
+
+  const clearCaptureError = (): void => {
+    errorEl.textContent = "";
+    errorEl.classList.add("hidden");
+  };
+
   const objectUrls = new Set<string>();
 
   const revokeUrls = (): void => {
@@ -318,14 +357,17 @@ function bindMediaControls(
     }
     const sessionKey = getSessionKey();
     if (!sessionKey) {
+      showCaptureError(new Error("Keine aktive Sitzung für Medienspeicherung."));
       return;
     }
 
+    clearCaptureError();
     try {
       await captureAndStoreMedia({ sessionKey, ownerKey, kind, file });
+      clearCaptureError();
       await reload();
     } catch (error) {
-      console.error(error);
+      showCaptureError(error);
     }
   };
 

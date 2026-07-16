@@ -63,8 +63,21 @@ export async function saveMedia(record: MediaRecord): Promise<void> {
   const db = await openDb();
   try {
     const tx = db.transaction(STORE_NAME, "readwrite");
-    tx.objectStore(STORE_NAME).put(record);
-    await transactionDone(tx);
+    const request = tx.objectStore(STORE_NAME).put(record);
+    await Promise.all([requestToPromise(request), transactionDone(tx)]);
+  } catch (error) {
+    const name =
+      error && typeof error === "object" && "name" in error
+        ? String((error as { name: string }).name)
+        : "";
+    if (name === "QuotaExceededError" || name === "NS_ERROR_DOM_QUOTA_REACHED") {
+      const quotaError = new Error(
+        "QuotaExceededError: IndexedDB-Speicherlimit erreicht."
+      );
+      quotaError.name = "QuotaExceededError";
+      throw quotaError;
+    }
+    throw error instanceof Error ? error : new Error("IndexedDB-Schreiben fehlgeschlagen.");
   } finally {
     db.close();
   }
