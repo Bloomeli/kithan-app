@@ -52,11 +52,13 @@ export class SignaturePad {
   }
 
   clear(): void {
-    const { width, height } = this.canvas;
-    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
-    this.ctx.clearRect(0, 0, width, height);
-    this.applyDrawingStyle();
     this.strokes = 0;
+    // Bust the cached CSS size so resize() always rebuilds the backing store
+    // and re-applies devicePixelRatio scaling (identity transform after a plain
+    // clearRect was the cause of the post-Löschen coordinate jump).
+    this.cssWidth = 0;
+    this.cssHeight = 0;
+    this.resize();
   }
 
   isEmpty(): boolean {
