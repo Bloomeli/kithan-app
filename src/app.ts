@@ -4,10 +4,13 @@
 import { SignaturePad } from "./signaturePad";
 import {
   generateAndDownloadProtocolPdf,
+  generateAndDownloadSchluesselPdf,
   type ProtocolPdfInput,
   type ProtocolPdfKeyLine,
   type ProtocolPdfRoom,
   type ProtocolPdfStandardMeter,
+  type SchluesselPdfEntry,
+  type SchluesselPdfInput,
 } from "./generateProtocolPdf";
 
 type Objektart = "schluessel" | "gewerbe" | "privat" | "garage";
@@ -52,6 +55,41 @@ const PROTOKOLLART_LABELS: Record<Protokollart, string> = {
   uebergabe: "Übergabe",
   ruecknahme: "Rücknahme",
 };
+
+const OBJEKTE = [
+  { id: "adalbertstrasse-104", label: "Adalbertstraße 104, 80798 München" },
+  { id: "adelheidstr-24", label: "Adelheidstr. 24, 80798 München" },
+  { id: "elisabethstrasse-8", label: "Elisabethstraße 8, 80739 München" },
+  { id: "goethestr-3", label: "Goethestr. 3, 80336 München" },
+  { id: "guntherstr-15", label: "Guntherstr. 15, 80639 München" },
+  { id: "herrnstrasse-44", label: "Herrnstraße 44, 80539 München" },
+  { id: "herzogstrasse-5", label: "Herzogstraße 5 (Lager), 80331 München" },
+  { id: "ismaninger-str-17-19", label: "Ismaninger Str. 17-19 (Duplex), 81675 München" },
+  { id: "maximiliansplatz-12a", label: "Maximiliansplatz 12a, 80333 München" },
+  { id: "steinstrasse-57", label: "Steinstraße 57, 81667 München" },
+  { id: "zenettistr-26", label: "Zenettistr. 26, 80337 München" },
+  { id: "koenigsstrasse-8", label: "Königsstraße 8 (Lager Dach), 93047 Regensburg" },
+  { id: "despagstrasse-4-4a", label: "Despagstraße 4-4a, 85055 Ingolstadt" },
+  { id: "spandauer-str-160b", label: "Spandauer Str. 160b, 14612 Falkensee" },
+  { id: "spandauer-str-160c", label: "Spandauer Str. 160c, 14612 Falkensee" },
+  { id: "berliner-str-35-55", label: "Berliner Str. 35-55, 14612 Falkensee" },
+  { id: "aberstr-23", label: "Aberstr. 23, 81679 München" },
+  { id: "delpstr-4", label: "Delpstr. 4 (BüroVilla), 81679 München" },
+  { id: "georgenstrasse-3", label: "Georgenstraße 3, 80799 München" },
+  { id: "georgenstrasse-3-rgb", label: "Georgenstraße 3 RGB, 80799 München" },
+  { id: "goethestrasse-8", label: "Goethestraße 8, 80336 München" },
+  { id: "seidlstrasse-8", label: "Seidlstraße 8, 80335 München" },
+  { id: "kaufinger-strasse-17", label: "Kaufinger Straße 17 (Einzelhandel), 80331 München" },
+  { id: "leopoldstrasse-41", label: "Leopoldstraße 41, 80802 München" },
+  { id: "nuernberger-str-24-26", label: "Nürnberger Str. 24-26 (Außenstellplätze), 91052 Erlangen" },
+  { id: "michael-vogel-str-1a", label: "Michael-Vogel-Str. 1a, 91052 Erlangen" },
+  { id: "michael-vogel-str-1b", label: "Michael-Vogel-Str. 1b, 91052 Erlangen" },
+  { id: "michael-vogel-str-1c", label: "Michael-Vogel-Str. 1c, 91052 Erlangen" },
+  { id: "michael-vogel-str-1d", label: "Michael-Vogel-Str. 1d, 91052 Erlangen" },
+  { id: "michael-vogel-str-1e", label: "Michael-Vogel-Str. 1e, 91052 Erlangen" },
+  { id: "auf-dem-streitacker-32-34", label: "Auf dem Streitacker 32-34 (Kita), 51149 Köln" },
+  { id: "hyazinthenweg-10-12", label: "Hyazinthenweg 10-12, 51069 Köln" },
+] as const;
 
 const DEFAULT_SUBTITLE = "Übergabe & Rücknahme Protokolle";
 
@@ -426,12 +464,42 @@ function getGebaeudeLabel(value: string): string {
   if (!value) {
     return "";
   }
+  const match = OBJEKTE.find((objekt) => objekt.id === value);
+  if (match) {
+    return match.label;
+  }
   const select = document.getElementById("gebaeude-auswahl") as HTMLSelectElement | null;
   if (!select) {
     return value;
   }
   const option = Array.from(select.options).find((item) => item.value === value);
   return option?.textContent?.trim() || value;
+}
+
+function populateGebaeudeSelect(): void {
+  const select = requireElement<HTMLSelectElement>("gebaeude-auswahl");
+  const previousValue = select.value;
+
+  select.innerHTML = "";
+
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.disabled = true;
+  placeholder.textContent = "Bitte Gebäude wählen...";
+  select.appendChild(placeholder);
+
+  OBJEKTE.forEach((objekt) => {
+    const option = document.createElement("option");
+    option.value = objekt.id;
+    option.textContent = objekt.label;
+    select.appendChild(option);
+  });
+
+  if (previousValue && OBJEKTE.some((objekt) => objekt.id === previousValue)) {
+    select.value = previousValue;
+  } else {
+    placeholder.selected = true;
+  }
 }
 
 function formatDraftTimestamp(iso: string): string {
@@ -729,7 +797,10 @@ let closingState: ClosingDraft = emptyClosingDraft();
 let schluesselEntryState: SchluesselEntry[] = [emptySchluesselEntry()];
 let vermieterSignaturePad: SignaturePad | null = null;
 let mieterSignaturePad: SignaturePad | null = null;
+let zeugeSignaturePad: SignaturePad | null = null;
 let signatureDatum = "";
+let vermieterDruckbuchstaben = "";
+let mieterDruckbuchstaben = "";
 let zeugeName = "";
 let zeugeAnschrift = "";
 
@@ -883,6 +954,7 @@ const roomsContainer = requireElement<HTMLDivElement>("rooms-container");
 const metersContainer = requireElement<HTMLDivElement>("meters-container");
 const closingContainer = requireElement<HTMLDivElement>("closing-container");
 const signatureContainer = requireElement<HTMLDivElement>("signature-container");
+const schluesselSignatureContainer = requireElement<HTMLDivElement>("signature-container-schluessel");
 const entwuerfeList = requireElement<HTMLDivElement>("entwuerfe-list");
 const entwuerfeEmpty = requireElement<HTMLParagraphElement>("entwuerfe-empty");
 const draftStatus = requireElement<HTMLParagraphElement>("draft-status");
@@ -922,15 +994,52 @@ function renderRooms(objektart: Objektart): void {
   renderPrivatRooms(draft);
 }
 
-function createStaticRoomCard(raum: RaumConfig, number: number, roomDraft: RoomDraft): HTMLDivElement {
+function createCollapsibleRoomCard(title: string): { card: HTMLDivElement; body: HTMLDivElement } {
   const card = document.createElement("div");
   card.className = "raum-karte";
 
-  const heading = document.createElement("h4");
-  heading.textContent = `${number}. ${raum.label}`;
-  card.appendChild(heading);
+  const header = document.createElement("div");
+  header.className = "raum-karte-header";
 
-  card.appendChild(
+  const heading = document.createElement("h4");
+  heading.textContent = title;
+  header.appendChild(heading);
+
+  const toggleButton = document.createElement("button");
+  toggleButton.type = "button";
+  toggleButton.className = "raum-karte-toggle";
+  toggleButton.setAttribute("aria-label", `${title} ein-/ausblenden`);
+  toggleButton.setAttribute("aria-expanded", "true");
+  const chevron = document.createElement("span");
+  chevron.className = "raum-karte-chevron";
+  chevron.setAttribute("aria-hidden", "true");
+  toggleButton.appendChild(chevron);
+  header.appendChild(toggleButton);
+
+  card.appendChild(header);
+
+  const body = document.createElement("div");
+  body.className = "raum-karte-body";
+  card.appendChild(body);
+
+  const toggle = (): void => {
+    const collapsed = card.classList.toggle("is-collapsed");
+    toggleButton.setAttribute("aria-expanded", String(!collapsed));
+  };
+  toggleButton.addEventListener("click", toggle);
+  header.addEventListener("click", (event) => {
+    if (event.target !== toggleButton && !toggleButton.contains(event.target as Node)) {
+      toggle();
+    }
+  });
+
+  return { card, body };
+}
+
+function createStaticRoomCard(raum: RaumConfig, number: number, roomDraft: RoomDraft): HTMLDivElement {
+  const { card, body } = createCollapsibleRoomCard(`${number}. ${raum.label}`);
+
+  body.appendChild(
     createTextareaGroup(
       `${raum.id}-ausstattung`,
       "Ausstattung:",
@@ -965,9 +1074,9 @@ function createStaticRoomCard(raum: RaumConfig, number: number, roomDraft: RoomD
 
   okGroup.appendChild(okCheckbox);
   okGroup.appendChild(okLabel);
-  card.appendChild(okGroup);
+  body.appendChild(okGroup);
 
-  card.appendChild(
+  body.appendChild(
     createTextareaGroup(
       `${raum.id}-maengel`,
       "Festgestellte Mängel:",
@@ -981,7 +1090,7 @@ function createStaticRoomCard(raum: RaumConfig, number: number, roomDraft: RoomD
       }
     )
   );
-  card.appendChild(
+  body.appendChild(
     createTextareaGroup(
       `${raum.id}-bemerkungen`,
       "Bemerkungen:",
@@ -1005,14 +1114,9 @@ function createWeitereRaumCard(
   showRemove: boolean,
   onRemove: () => void
 ): HTMLDivElement {
-  const card = document.createElement("div");
-  card.className = "raum-karte";
+  const { card, body } = createCollapsibleRoomCard(`Weitere Räume ${index + 1}`);
 
-  const heading = document.createElement("h4");
-  heading.textContent = `Weitere Räume ${index + 1}`;
-  card.appendChild(heading);
-
-  card.appendChild(
+  body.appendChild(
     createTextareaGroup(
       `${entry.id}-ausstattung`,
       "Ausstattung:",
@@ -1043,9 +1147,9 @@ function createWeitereRaumCard(
 
   okGroup.appendChild(okCheckbox);
   okGroup.appendChild(okLabel);
-  card.appendChild(okGroup);
+  body.appendChild(okGroup);
 
-  card.appendChild(
+  body.appendChild(
     createTextareaGroup(
       `${entry.id}-maengel`,
       "Festgestellte Mängel:",
@@ -1057,7 +1161,7 @@ function createWeitereRaumCard(
       }
     )
   );
-  card.appendChild(
+  body.appendChild(
     createTextareaGroup(
       `${entry.id}-bemerkungen`,
       "Bemerkungen:",
@@ -1073,7 +1177,7 @@ function createWeitereRaumCard(
   if (showRemove) {
     const removeButton = createRemoveButton(onRemove);
     removeButton.textContent = "Raum entfernen";
-    card.appendChild(removeButton);
+    body.appendChild(removeButton);
   }
 
   return card;
@@ -1138,14 +1242,9 @@ function createBueroRoomCard(
   showRemove: boolean,
   onRemove: () => void
 ): HTMLDivElement {
-  const card = document.createElement("div");
-  card.className = "raum-karte";
+  const { card, body } = createCollapsibleRoomCard(`Büro ${index + 1}`);
 
-  const heading = document.createElement("h4");
-  heading.textContent = `Büro ${index + 1}`;
-  card.appendChild(heading);
-
-  card.appendChild(
+  body.appendChild(
     createTextareaGroup(
       `${entry.id}-ausstattung`,
       "Ausstattung:",
@@ -1176,9 +1275,9 @@ function createBueroRoomCard(
 
   okGroup.appendChild(okCheckbox);
   okGroup.appendChild(okLabel);
-  card.appendChild(okGroup);
+  body.appendChild(okGroup);
 
-  card.appendChild(
+  body.appendChild(
     createTextareaGroup(
       `${entry.id}-maengel`,
       "Festgestellte Mängel:",
@@ -1190,7 +1289,7 @@ function createBueroRoomCard(
       }
     )
   );
-  card.appendChild(
+  body.appendChild(
     createTextareaGroup(
       `${entry.id}-bemerkungen`,
       "Bemerkungen:",
@@ -1206,7 +1305,7 @@ function createBueroRoomCard(
   if (showRemove) {
     const removeButton = createRemoveButton(onRemove);
     removeButton.textContent = "Büro entfernen";
-    card.appendChild(removeButton);
+    body.appendChild(removeButton);
   }
 
   return card;
@@ -1275,14 +1374,9 @@ function createGarageRoomCard(
   showRemove: boolean,
   onRemove: () => void
 ): HTMLDivElement {
-  const card = document.createElement("div");
-  card.className = "raum-karte";
+  const { card, body } = createCollapsibleRoomCard(`Garage ${index + 1}`);
 
-  const heading = document.createElement("h4");
-  heading.textContent = `Garage ${index + 1}`;
-  card.appendChild(heading);
-
-  card.appendChild(
+  body.appendChild(
     createTextareaGroup(
       `${entry.id}-ausstattung`,
       "Ausstattung:",
@@ -1313,9 +1407,9 @@ function createGarageRoomCard(
 
   okGroup.appendChild(okCheckbox);
   okGroup.appendChild(okLabel);
-  card.appendChild(okGroup);
+  body.appendChild(okGroup);
 
-  card.appendChild(
+  body.appendChild(
     createTextareaGroup(
       `${entry.id}-maengel`,
       "Festgestellte Mängel:",
@@ -1327,7 +1421,7 @@ function createGarageRoomCard(
       }
     )
   );
-  card.appendChild(
+  body.appendChild(
     createTextareaGroup(
       `${entry.id}-bemerkungen`,
       "Bemerkungen:",
@@ -1343,7 +1437,7 @@ function createGarageRoomCard(
   if (showRemove) {
     const removeButton = createRemoveButton(onRemove);
     removeButton.textContent = "Garage entfernen";
-    card.appendChild(removeButton);
+    body.appendChild(removeButton);
   }
 
   return card;
@@ -1977,19 +2071,28 @@ function renderClosingSection(objektart: Objektart, protokollart: Protokollart):
 function destroySignaturePads(): void {
   vermieterSignaturePad?.destroy();
   mieterSignaturePad?.destroy();
+  zeugeSignaturePad?.destroy();
   vermieterSignaturePad = null;
   mieterSignaturePad = null;
+  zeugeSignaturePad = null;
 }
 
 function resetSignatureUiState(): void {
   destroySignaturePads();
   signatureDatum = "";
+  vermieterDruckbuchstaben = "";
+  mieterDruckbuchstaben = "";
   zeugeName = "";
   zeugeAnschrift = "";
   signatureContainer.innerHTML = "";
+  schluesselSignatureContainer.innerHTML = "";
 }
 
-function createSignaturePadBlock(title: string, canvasId: string): {
+function createSignaturePadBlock(
+  title: string,
+  canvasId: string,
+  extraFieldBefore?: HTMLDivElement
+): {
   block: HTMLDivElement;
   canvas: HTMLCanvasElement;
   clearButton: HTMLButtonElement;
@@ -2001,6 +2104,10 @@ function createSignaturePadBlock(title: string, canvasId: string): {
   heading.className = "signature-block-title";
   heading.textContent = title;
   block.appendChild(heading);
+
+  if (extraFieldBefore) {
+    block.appendChild(extraFieldBefore);
+  }
 
   const wrap = document.createElement("div");
   wrap.className = "signature-pad-wrap";
@@ -2030,8 +2137,24 @@ function maengelStatusLabel(status: KopfdatenDraft["maengelStatus"]): string {
   return "";
 }
 
-function collectRoomsForPdf(objektart: "gewerbe" | "privat", form: FormDraft): ProtocolPdfRoom[] {
+function collectRoomsForPdf(
+  objektart: "gewerbe" | "privat" | "garage",
+  form: FormDraft
+): ProtocolPdfRoom[] {
   const rooms: ProtocolPdfRoom[] = [];
+
+  if (objektart === "garage") {
+    (form.garageRooms ?? []).forEach((entry, index) => {
+      rooms.push({
+        label: `Garage ${index + 1}`,
+        ok: entry.ok,
+        ausstattung: entry.ausstattung,
+        maengel: entry.maengel,
+        bemerkungen: entry.bemerkungen,
+      });
+    });
+    return rooms;
+  }
 
   if (objektart === "privat") {
     RAEUME.privat.forEach((raum) => {
@@ -2144,8 +2267,26 @@ function collectKeyLinesForPdf(closing: ClosingDraft | null): ProtocolPdfKeyLine
   return lines;
 }
 
+function currentVermieterSignaturePng(): string | null {
+  return vermieterSignaturePad && !vermieterSignaturePad.isEmpty()
+    ? vermieterSignaturePad.toDataURL("image/png")
+    : null;
+}
+
+function currentMieterSignaturePng(): string | null {
+  return mieterSignaturePad && !mieterSignaturePad.isEmpty()
+    ? mieterSignaturePad.toDataURL("image/png")
+    : null;
+}
+
+function currentZeugeSignaturePng(): string | null {
+  return zeugeSignaturePad && !zeugeSignaturePad.isEmpty()
+    ? zeugeSignaturePad.toDataURL("image/png")
+    : null;
+}
+
 function buildProtocolPdfInput(
-  objektart: "gewerbe" | "privat",
+  objektart: "gewerbe" | "privat" | "garage",
   protokollart: Protokollart,
   form: FormDraft
 ): ProtocolPdfInput {
@@ -2168,14 +2309,37 @@ function buildProtocolPdfInput(
     bemerkungenSonstiges: form.closing?.bemerkungenSonstiges ?? "",
     keyLines: collectKeyLinesForPdf(form.closing),
     signatureDatum,
-    vermieterSignaturePng: vermieterSignaturePad && !vermieterSignaturePad.isEmpty()
-      ? vermieterSignaturePad.toDataURL("image/png")
-      : null,
-    mieterSignaturePng: mieterSignaturePad && !mieterSignaturePad.isEmpty()
-      ? mieterSignaturePad.toDataURL("image/png")
-      : null,
+    vermieterSignaturePng: currentVermieterSignaturePng(),
+    vermieterDruckbuchstaben,
+    mieterSignaturePng: currentMieterSignaturePng(),
+    mieterDruckbuchstaben,
     zeugeName,
     zeugeAnschrift,
+    zeugeSignaturePng: currentZeugeSignaturePng(),
+  };
+}
+
+function buildSchluesselPdfInput(protokollart: Protokollart, form: FormDraft): SchluesselPdfInput {
+  const data = form.schluessel ?? emptySchluesselDraft();
+  const entries: SchluesselPdfEntry[] = data.entries.map((entry) => ({
+    anzahl: entry.anzahl,
+    schluesselnummer: entry.schluesselnummer,
+  }));
+
+  return {
+    protokollartLabel: PROTOKOLLART_LABELS[protokollart],
+    mietername: data.mietername,
+    wohnungEinheit: data.wohnungEinheit,
+    bemerkungen: data.bemerkungen,
+    entries,
+    signatureDatum,
+    vermieterSignaturePng: currentVermieterSignaturePng(),
+    vermieterDruckbuchstaben,
+    mieterSignaturePng: currentMieterSignaturePng(),
+    mieterDruckbuchstaben,
+    zeugeName,
+    zeugeAnschrift,
+    zeugeSignaturePng: currentZeugeSignaturePng(),
   };
 }
 
@@ -2189,8 +2353,11 @@ function clearCurrentSessionDraft(): void {
 
 function finishProtocolAsPdf(): void {
   const context = getCurrentFormContext();
-  if (!context || (context.objektart !== "gewerbe" && context.objektart !== "privat")) {
-    showDraftStatus("PDF-Export ist nur für Gewerbe/Privat verfügbar.", true);
+  if (
+    !context ||
+    (context.objektart !== "gewerbe" && context.objektart !== "privat" && context.objektart !== "garage")
+  ) {
+    showDraftStatus("PDF-Export ist nur für Gewerbe/Privat/Garage verfügbar.", true);
     return;
   }
 
@@ -2220,45 +2387,91 @@ function finishProtocolAsPdf(): void {
   showOnly(viewObjektart);
 }
 
-function renderSignatureSection(objektart: Objektart): void {
-  resetSignatureUiState();
-
-  if (objektart === "garage" || objektart === "schluessel") {
+function finishSchluesselAsPdf(): void {
+  const context = getCurrentFormContext();
+  if (!context || context.objektart !== "schluessel") {
+    showDraftStatus("PDF-Export ist nur für das Schlüssel-Formular verfügbar.", true);
     return;
   }
+
+  persistSchluesselFromDom();
+  const form = loadFormDraft(context.objektart, context.protokollart);
+
+  try {
+    generateAndDownloadSchluesselPdf(buildSchluesselPdfInput(context.protokollart, form));
+  } catch (error) {
+    console.error(error);
+    showDraftStatus("PDF konnte nicht erzeugt werden.", true);
+    return;
+  }
+
+  clearCurrentSessionDraft();
+  clearKopfdatenFields();
+  resetSignatureUiState();
+  localStorage.removeItem(STORAGE_KEYS.objektart);
+  localStorage.removeItem(STORAGE_KEYS.protokollart);
+  setAppSubtitle(DEFAULT_SUBTITLE, false);
+  showOnly(viewObjektart);
+}
+
+function renderSignatureSection(container: HTMLDivElement, idPrefix: string, onFinish: () => void): void {
+  resetSignatureUiState();
 
   const heading = document.createElement("h3");
   heading.className = "section-title";
   heading.textContent = "Unterschriften";
-  signatureContainer.appendChild(heading);
+  container.appendChild(heading);
 
   const datumGroup = document.createElement("div");
   datumGroup.className = "input-group";
   const datumLabel = document.createElement("label");
-  datumLabel.htmlFor = "signature-datum";
+  datumLabel.htmlFor = `${idPrefix}-signature-datum`;
   datumLabel.textContent = "Datum";
   const datumInput = document.createElement("input");
   datumInput.type = "date";
-  datumInput.id = "signature-datum";
+  datumInput.id = `${idPrefix}-signature-datum`;
   datumInput.value = signatureDatum;
-  datumInput.addEventListener("change", () => {
+  const updateDatum = (): void => {
     signatureDatum = datumInput.value;
-  });
-  datumInput.addEventListener("input", () => {
-    signatureDatum = datumInput.value;
-  });
+  };
+  datumInput.addEventListener("change", updateDatum);
+  datumInput.addEventListener("input", updateDatum);
   datumGroup.append(datumLabel, datumInput);
-  signatureContainer.appendChild(datumGroup);
+  container.appendChild(datumGroup);
 
-  const vermieter = createSignaturePadBlock("Vermieter", "signature-vermieter");
-  signatureContainer.appendChild(vermieter.block);
+  const vermieterDruck = createTextField(
+    `${idPrefix}-vermieter-druckbuchstaben`,
+    "Name in Druckbuchstaben",
+    vermieterDruckbuchstaben,
+    "text",
+    (value) => {
+      vermieterDruckbuchstaben = value;
+    },
+    "Name des Vermieters"
+  );
+  const vermieter = createSignaturePadBlock(
+    "Vermieter",
+    `${idPrefix}-signature-vermieter`,
+    vermieterDruck
+  );
+  container.appendChild(vermieter.block);
   vermieterSignaturePad = new SignaturePad(vermieter.canvas);
   vermieter.clearButton.addEventListener("click", () => {
     vermieterSignaturePad?.clear();
   });
 
-  const mieter = createSignaturePadBlock("Mieter", "signature-mieter");
-  signatureContainer.appendChild(mieter.block);
+  const mieterDruck = createTextField(
+    `${idPrefix}-mieter-druckbuchstaben`,
+    "Name in Druckbuchstaben",
+    mieterDruckbuchstaben,
+    "text",
+    (value) => {
+      mieterDruckbuchstaben = value;
+    },
+    "Name des Mieters"
+  );
+  const mieter = createSignaturePadBlock("Mieter", `${idPrefix}-signature-mieter`, mieterDruck);
+  container.appendChild(mieter.block);
   mieterSignaturePad = new SignaturePad(mieter.canvas);
   mieter.clearButton.addEventListener("click", () => {
     mieterSignaturePad?.clear();
@@ -2271,29 +2484,26 @@ function renderSignatureSection(objektart: Objektart): void {
   zeugenHeading.textContent = "Zeuge(n)";
   zeugenBlock.appendChild(zeugenHeading);
 
-  const nameGroup = document.createElement("div");
-  nameGroup.className = "input-group";
-  const nameLabel = document.createElement("label");
-  nameLabel.htmlFor = "zeuge-name";
-  nameLabel.textContent = "Name";
-  const nameInput = document.createElement("input");
-  nameInput.type = "text";
-  nameInput.id = "zeuge-name";
-  nameInput.placeholder = "Name des Zeugen";
-  nameInput.value = zeugeName;
-  nameInput.addEventListener("input", () => {
-    zeugeName = nameInput.value;
-  });
-  nameGroup.append(nameLabel, nameInput);
-  zeugenBlock.appendChild(nameGroup);
+  zeugenBlock.appendChild(
+    createTextField(
+      `${idPrefix}-zeuge-name`,
+      "Name",
+      zeugeName,
+      "text",
+      (value) => {
+        zeugeName = value;
+      },
+      "Name des Zeugen"
+    )
+  );
 
   const anschriftGroup = document.createElement("div");
   anschriftGroup.className = "input-group";
   const anschriftLabel = document.createElement("label");
-  anschriftLabel.htmlFor = "zeuge-anschrift";
+  anschriftLabel.htmlFor = `${idPrefix}-zeuge-anschrift`;
   anschriftLabel.textContent = "Anschrift";
   const anschriftInput = document.createElement("textarea");
-  anschriftInput.id = "zeuge-anschrift";
+  anschriftInput.id = `${idPrefix}-zeuge-anschrift`;
   anschriftInput.rows = 3;
   anschriftInput.placeholder = "Anschrift des Zeugen";
   anschriftInput.value = zeugeAnschrift;
@@ -2302,16 +2512,22 @@ function renderSignatureSection(objektart: Objektart): void {
   });
   anschriftGroup.append(anschriftLabel, anschriftInput);
   zeugenBlock.appendChild(anschriftGroup);
-  signatureContainer.appendChild(zeugenBlock);
+
+  const zeuge = createSignaturePadBlock("Unterschrift", `${idPrefix}-signature-zeuge`);
+  zeugenBlock.appendChild(zeuge.block);
+  zeugeSignaturePad = new SignaturePad(zeuge.canvas);
+  zeuge.clearButton.addEventListener("click", () => {
+    zeugeSignaturePad?.clear();
+  });
+
+  container.appendChild(zeugenBlock);
 
   const finishButton = document.createElement("button");
   finishButton.type = "button";
   finishButton.className = "main-btn btn-finish-pdf";
   finishButton.textContent = "Fertigstellen und als PDF speichern";
-  finishButton.addEventListener("click", () => {
-    finishProtocolAsPdf();
-  });
-  signatureContainer.appendChild(finishButton);
+  finishButton.addEventListener("click", onFinish);
+  container.appendChild(finishButton);
 }
 
 function goToProtokollartView(objektart: Objektart): void {
@@ -2574,11 +2790,11 @@ function showFormular(objektart: Objektart, protokollart: Protokollart): void {
   if (objektart === "schluessel") {
     formStandard.classList.add("hidden");
     formSchluessel.classList.remove("hidden");
-    resetSignatureUiState();
     restoreSchluessel(draft);
     if (!draft.schluessel) {
       persistSchluesselFromDom();
     }
+    renderSignatureSection(schluesselSignatureContainer, "schluessel", finishSchluesselAsPdf);
     showOnly(viewFormular);
     return;
   }
@@ -2590,7 +2806,7 @@ function showFormular(objektart: Objektart, protokollart: Protokollart): void {
   renderRooms(objektart);
   renderMeterSections(objektart);
   renderClosingSection(objektart, protokollart);
-  renderSignatureSection(objektart);
+  renderSignatureSection(signatureContainer, "standard", finishProtocolAsPdf);
   showOnly(viewFormular);
 }
 
@@ -2711,6 +2927,7 @@ function initEventListeners(): void {
 }
 
 function init(): void {
+  populateGebaeudeSelect();
   initEventListeners();
   restoreSelection();
 }

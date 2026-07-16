@@ -44,9 +44,33 @@ export interface ProtocolPdfInput {
   keyLines: ProtocolPdfKeyLine[];
   signatureDatum: string;
   vermieterSignaturePng: string | null;
+  vermieterDruckbuchstaben: string;
   mieterSignaturePng: string | null;
+  mieterDruckbuchstaben: string;
   zeugeName: string;
   zeugeAnschrift: string;
+  zeugeSignaturePng: string | null;
+}
+
+export interface SchluesselPdfEntry {
+  anzahl: string;
+  schluesselnummer: string;
+}
+
+export interface SchluesselPdfInput {
+  protokollartLabel: string;
+  mietername: string;
+  wohnungEinheit: string;
+  bemerkungen: string;
+  entries: SchluesselPdfEntry[];
+  signatureDatum: string;
+  vermieterSignaturePng: string | null;
+  vermieterDruckbuchstaben: string;
+  mieterSignaturePng: string | null;
+  mieterDruckbuchstaben: string;
+  zeugeName: string;
+  zeugeAnschrift: string;
+  zeugeSignaturePng: string | null;
 }
 
 const MARGIN = 16;
@@ -75,6 +99,14 @@ function textOrDash(value: string): string {
 function buildFilename(input: ProtocolPdfInput): string {
   const datePart = input.signatureDatum || input.besichtigungsdatum || "ohne-datum";
   const safe = `${input.objektartLabel}_${input.protokollartLabel}_${datePart}`
+    .replace(/[^\w\-äöüÄÖÜß]+/g, "_")
+    .replace(/_+/g, "_");
+  return `Protokoll_${safe}.pdf`;
+}
+
+function buildSchluesselFilename(input: SchluesselPdfInput): string {
+  const datePart = input.signatureDatum || "ohne-datum";
+  const safe = `Schluessel_${input.protokollartLabel}_${datePart}`
     .replace(/[^\w\-äöüÄÖÜß]+/g, "_")
     .replace(/_+/g, "_");
   return `Protokoll_${safe}.pdf`;
@@ -148,8 +180,7 @@ class PdfWriter {
     this.y += mm;
   }
 
-  addSignatureImage(label: string, dataUrl: string | null): void {
-    this.addSubsection(label);
+  addSignatureBody(dataUrl: string | null): void {
     if (!dataUrl) {
       this.addWrapped("(keine Unterschrift)");
       this.addBlank(2);
@@ -162,6 +193,36 @@ class PdfWriter {
     this.doc.addImage(dataUrl, "PNG", MARGIN, this.y, imgWidth, imgHeight);
     this.y += imgHeight + 6;
   }
+}
+
+function writeSignatureSection(
+  writer: PdfWriter,
+  data: {
+    signatureDatum: string;
+    vermieterSignaturePng: string | null;
+    vermieterDruckbuchstaben: string;
+    mieterSignaturePng: string | null;
+    mieterDruckbuchstaben: string;
+    zeugeName: string;
+    zeugeAnschrift: string;
+    zeugeSignaturePng: string | null;
+  }
+): void {
+  writer.addSection("Unterschriften");
+  writer.addLine("Datum", formatDateDe(data.signatureDatum));
+
+  writer.addSubsection("Vermieter");
+  writer.addLine("Name in Druckbuchstaben", data.vermieterDruckbuchstaben);
+  writer.addSignatureBody(data.vermieterSignaturePng);
+
+  writer.addSubsection("Mieter");
+  writer.addLine("Name in Druckbuchstaben", data.mieterDruckbuchstaben);
+  writer.addSignatureBody(data.mieterSignaturePng);
+
+  writer.addSubsection("Zeuge(n)");
+  writer.addLine("Name", data.zeugeName);
+  writer.addLine("Anschrift", data.zeugeAnschrift);
+  writer.addSignatureBody(data.zeugeSignaturePng);
 }
 
 export function generateAndDownloadProtocolPdf(input: ProtocolPdfInput): void {
@@ -230,13 +291,37 @@ export function generateAndDownloadProtocolPdf(input: ProtocolPdfInput): void {
     });
   }
 
-  writer.addSection("Unterschriften");
-  writer.addLine("Datum", formatDateDe(input.signatureDatum));
-  writer.addSignatureImage("Vermieter", input.vermieterSignaturePng);
-  writer.addSignatureImage("Mieter", input.mieterSignaturePng);
-  writer.addSubsection("Zeuge(n)");
-  writer.addLine("Name", input.zeugeName);
-  writer.addLine("Anschrift", input.zeugeAnschrift);
+  writeSignatureSection(writer, input);
 
   writer.getDocument().save(buildFilename(input));
+}
+
+export function generateAndDownloadSchluesselPdf(input: SchluesselPdfInput): void {
+  const writer = new PdfWriter();
+
+  writer.addTitle(`Protokoll ${input.protokollartLabel} – Schlüssel`);
+  writer.addLine("Protokollart", input.protokollartLabel);
+
+  writer.addSection("Kopfdaten");
+  writer.addLine("Name des Mieters", input.mietername);
+  writer.addLine("Wohnung/Einheit", input.wohnungEinheit);
+
+  writer.addSection("Schlüssel");
+  if (input.entries.length === 0) {
+    writer.addWrapped("Keine Schlüsselangaben erfasst.");
+  } else {
+    input.entries.forEach((entry, index) => {
+      writer.addSubsection(`Schlüssel ${index + 1}`);
+      writer.addLine("Anzahl der Schlüssel", entry.anzahl);
+      writer.addLine("Schlüsselnummer", entry.schluesselnummer);
+      writer.addBlank(2);
+    });
+  }
+
+  writer.addSection("Sonstiges/Bemerkungen");
+  writer.addWrapped(textOrDash(input.bemerkungen));
+
+  writeSignatureSection(writer, input);
+
+  writer.getDocument().save(buildSchluesselFilename(input));
 }
