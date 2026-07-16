@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Kithan App</title>
+    <title>Kithan Vermietung</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
     <main class="dashboard-container">
         <div class="logo-area">
-            <h1><span class="highlight">K</span>ithan App</h1>
+            <h1 id="app-title"><span class="highlight">K</span>ithan <span class="highlight">V</span>ermietung</h1>
             <p id="app-subtitle">Übergabe & Rücknahme Protokolle</p>
         </div>
 
@@ -38,7 +38,7 @@
 
         <div id="view-formular" class="form-container hidden">
             <div id="form-standard">
-                <h2 style="margin-bottom: 20px;">Kopfdaten</h2>
+                <h2 class="heading-kopfdaten" style="margin-bottom: 20px;">Kopfdaten</h2>
 
                 <div class="input-group">
                     <label>Name der/des Mieter(s):</label>
@@ -78,7 +78,7 @@
             </div>
 
             <div id="form-schluessel" class="hidden">
-                <h2 style="margin-bottom: 20px;">Schlüssel</h2>
+                <h2 class="heading-kopfdaten" style="margin-bottom: 20px;">Schlüssel</h2>
 
                 <div class="input-group">
                     <label for="schluessel-mietername">Name des Mieters:</label>
@@ -104,7 +104,7 @@
 
             <button class="main-btn btn-save-draft" id="btn-entwurf-speichern" type="button">Als Entwurf speichern</button>
             <button class="main-btn btn-back" id="btn-zurueck-formular" type="button">Zurück</button>
-            <button class="main-btn" id="btn-neustart" type="button" style="border-color: #ff3333; margin-top: 12px;">Neustart (Abbrechen)</button>
+            <button class="main-btn btn-neustart" id="btn-neustart" type="button">Neustart (Abbrechen)</button>
         </div>
     </main>
 

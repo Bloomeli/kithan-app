@@ -1,7 +1,9 @@
-// Kithan App – Anwendungslogik (Prototyp)
+// Kithan Vermietung – Anwendungslogik (Prototyp)
 // Ablauf: Objektart wählen -> Protokollart wählen -> Formular (Kopfdaten + Räume)
 
 import { SignaturePad } from "./signaturePad";
+import { createMeterMediaHeader, createRoomOkMediaRow } from "./cardMedia";
+import { deleteMediaForOwner, deleteMediaForSession } from "./mediaStore";
 import {
   generateAndDownloadProtocolPdf,
   generateAndDownloadSchluesselPdf,
@@ -403,7 +405,30 @@ function clearAllFormDrafts(): void {
       keysToRemove.push(key);
     }
   }
-  keysToRemove.forEach((key) => localStorage.removeItem(key));
+  keysToRemove.forEach((key) => {
+    localStorage.removeItem(key);
+    void deleteMediaForSession(key).catch((error) => console.error(error));
+  });
+}
+
+function getMediaSessionKey(): string | null {
+  const context = getCurrentFormContext();
+  if (!context) {
+    return null;
+  }
+  return formDraftKey(context.objektart, context.protokollart);
+}
+
+async function removeOwnerMedia(ownerKey: string): Promise<void> {
+  const sessionKey = getMediaSessionKey();
+  if (!sessionKey) {
+    return;
+  }
+  try {
+    await deleteMediaForOwner(sessionKey, ownerKey);
+  } catch (error) {
+    console.error(error);
+  }
 }
 
 // --- Explizite Entwürfe (getrennt vom Session-Autosave) -----------------
@@ -947,6 +972,7 @@ const formSchluessel = requireElement<HTMLDivElement>("form-schluessel");
 const schluesselEntriesContainer = requireElement<HTMLDivElement>("schluessel-entries-container");
 const gewaehlteObjektartHeading = requireElement<HTMLHeadingElement>("gewaehlte-objektart");
 const appSubtitle = requireElement<HTMLParagraphElement>("app-subtitle");
+const appTitle = requireElement<HTMLHeadingElement>("app-title");
 const labelBesichtigt = requireElement<HTMLLabelElement>("label-besichtigt");
 const labelBesichtigungsdatum = requireElement<HTMLLabelElement>("label-besichtigungsdatum");
 const headingRaeume = requireElement<HTMLHeadingElement>("heading-raeume");
@@ -1054,27 +1080,19 @@ function createStaticRoomCard(raum: RaumConfig, number: number, roomDraft: RoomD
     )
   );
 
-  const okGroup = document.createElement("div");
-  okGroup.className = "radio-group room-ok-row";
-
-  const okCheckbox = document.createElement("input");
-  okCheckbox.type = "checkbox";
-  okCheckbox.id = `${raum.id}-ok`;
-  okCheckbox.checked = roomDraft.ok;
-  okCheckbox.addEventListener("change", () => {
-    updateCurrentFormDraft((current) => {
-      const existing = normalizeRoomDraft(current.rooms[raum.id]);
-      current.rooms[raum.id] = { ...existing, ok: okCheckbox.checked };
-    });
-  });
-
-  const okLabel = document.createElement("label");
-  okLabel.htmlFor = okCheckbox.id;
-  okLabel.textContent = "In Ordnung (ja)";
-
-  okGroup.appendChild(okCheckbox);
-  okGroup.appendChild(okLabel);
-  body.appendChild(okGroup);
+  const { row: okMediaRow } = createRoomOkMediaRow(
+    `${raum.id}-ok`,
+    roomDraft.ok,
+    (checked) => {
+      updateCurrentFormDraft((current) => {
+        const existing = normalizeRoomDraft(current.rooms[raum.id]);
+        current.rooms[raum.id] = { ...existing, ok: checked };
+      });
+    },
+    getMediaSessionKey,
+    raum.id
+  );
+  body.appendChild(okMediaRow);
 
   body.appendChild(
     createTextareaGroup(
@@ -1129,25 +1147,17 @@ function createWeitereRaumCard(
     )
   );
 
-  const okGroup = document.createElement("div");
-  okGroup.className = "radio-group room-ok-row";
-
-  const okCheckbox = document.createElement("input");
-  okCheckbox.type = "checkbox";
-  okCheckbox.id = `${entry.id}-ok`;
-  okCheckbox.checked = entry.ok;
-  okCheckbox.addEventListener("change", () => {
-    entry.ok = okCheckbox.checked;
-    persistWeitereRaeume();
-  });
-
-  const okLabel = document.createElement("label");
-  okLabel.htmlFor = okCheckbox.id;
-  okLabel.textContent = "In Ordnung (ja)";
-
-  okGroup.appendChild(okCheckbox);
-  okGroup.appendChild(okLabel);
-  body.appendChild(okGroup);
+  const { row: okMediaRow } = createRoomOkMediaRow(
+    `${entry.id}-ok`,
+    entry.ok,
+    (checked) => {
+      entry.ok = checked;
+      persistWeitereRaeume();
+    },
+    getMediaSessionKey,
+    entry.id
+  );
+  body.appendChild(okMediaRow);
 
   body.appendChild(
     createTextareaGroup(
@@ -1191,6 +1201,7 @@ function appendWeitereRaeumeBlock(): void {
     const showRemove = weitereRaumState.length > 1;
     wrapper.appendChild(
       createWeitereRaumCard(entry, index, showRemove, () => {
+        void removeOwnerMedia(entry.id);
         weitereRaumState = weitereRaumState.filter((e) => e.id !== entry.id);
         persistWeitereRaeume();
         renderRooms("privat");
@@ -1257,25 +1268,17 @@ function createBueroRoomCard(
     )
   );
 
-  const okGroup = document.createElement("div");
-  okGroup.className = "radio-group room-ok-row";
-
-  const okCheckbox = document.createElement("input");
-  okCheckbox.type = "checkbox";
-  okCheckbox.id = `${entry.id}-ok`;
-  okCheckbox.checked = entry.ok;
-  okCheckbox.addEventListener("change", () => {
-    entry.ok = okCheckbox.checked;
-    persistBueroRooms();
-  });
-
-  const okLabel = document.createElement("label");
-  okLabel.htmlFor = okCheckbox.id;
-  okLabel.textContent = "In Ordnung (ja)";
-
-  okGroup.appendChild(okCheckbox);
-  okGroup.appendChild(okLabel);
-  body.appendChild(okGroup);
+  const { row: okMediaRow } = createRoomOkMediaRow(
+    `${entry.id}-ok`,
+    entry.ok,
+    (checked) => {
+      entry.ok = checked;
+      persistBueroRooms();
+    },
+    getMediaSessionKey,
+    entry.id
+  );
+  body.appendChild(okMediaRow);
 
   body.appendChild(
     createTextareaGroup(
@@ -1319,6 +1322,7 @@ function appendBueroRoomsBlock(): void {
     const showRemove = bueroRoomState.length > 1;
     wrapper.appendChild(
       createBueroRoomCard(entry, index, showRemove, () => {
+        void removeOwnerMedia(entry.id);
         bueroRoomState = bueroRoomState.filter((e) => e.id !== entry.id);
         persistBueroRooms();
         renderRooms("gewerbe");
@@ -1389,25 +1393,17 @@ function createGarageRoomCard(
     )
   );
 
-  const okGroup = document.createElement("div");
-  okGroup.className = "radio-group room-ok-row";
-
-  const okCheckbox = document.createElement("input");
-  okCheckbox.type = "checkbox";
-  okCheckbox.id = `${entry.id}-ok`;
-  okCheckbox.checked = entry.ok;
-  okCheckbox.addEventListener("change", () => {
-    entry.ok = okCheckbox.checked;
-    persistGarageRooms();
-  });
-
-  const okLabel = document.createElement("label");
-  okLabel.htmlFor = okCheckbox.id;
-  okLabel.textContent = "In Ordnung (ja)";
-
-  okGroup.appendChild(okCheckbox);
-  okGroup.appendChild(okLabel);
-  body.appendChild(okGroup);
+  const { row: okMediaRow } = createRoomOkMediaRow(
+    `${entry.id}-ok`,
+    entry.ok,
+    (checked) => {
+      entry.ok = checked;
+      persistGarageRooms();
+    },
+    getMediaSessionKey,
+    entry.id
+  );
+  body.appendChild(okMediaRow);
 
   body.appendChild(
     createTextareaGroup(
@@ -1469,6 +1465,7 @@ function renderGarageRooms(): void {
     const showRemove = garageRoomState.length > 1;
     roomsContainer.appendChild(
       createGarageRoomCard(entry, index, showRemove, () => {
+        void removeOwnerMedia(entry.id);
         garageRoomState = garageRoomState.filter((e) => e.id !== entry.id);
         persistGarageRooms();
         renderGarageRooms();
@@ -1596,9 +1593,12 @@ function createElectricityCard(
   const card = document.createElement("div");
   card.className = "raum-karte meter-karte";
 
-  const heading = document.createElement("h4");
-  heading.textContent = `Stromzähler ${index + 1}`;
-  card.appendChild(heading);
+  const { root: mediaHeader } = createMeterMediaHeader(
+    `Stromzähler ${index + 1}`,
+    getMediaSessionKey,
+    entry.id
+  );
+  card.appendChild(mediaHeader);
 
   card.appendChild(
     createTextField(`${entry.id}-nummer`, "Zählernummer:", entry.meterNumber, "text", (value) => {
@@ -1656,6 +1656,7 @@ function renderElectricitySection(container: HTMLElement): void {
     const showRemove = meterState.strom.length > 1;
     cardsWrapper.appendChild(
       createElectricityCard(entry, index, showRemove, () => {
+        void removeOwnerMedia(entry.id);
         meterState.strom = meterState.strom.filter((e) => e.id !== entry.id);
         persistMeters();
         renderElectricitySection(container);
@@ -1686,9 +1687,12 @@ function createStandardMeterCard(
   const card = document.createElement("div");
   card.className = "raum-karte meter-karte";
 
-  const heading = document.createElement("h4");
-  heading.textContent = `${config.title} ${index + 1}`;
-  card.appendChild(heading);
+  const { root: mediaHeader } = createMeterMediaHeader(
+    `${config.title} ${index + 1}`,
+    getMediaSessionKey,
+    entry.id
+  );
+  card.appendChild(mediaHeader);
 
   if (config.withLocation) {
     card.appendChild(
@@ -1756,6 +1760,7 @@ function renderStandardMeterSection(config: StandardMeterSectionConfig, containe
     const showRemove = entries.length > 1;
     cardsWrapper.appendChild(
       createStandardMeterCard(config, entry, index, showRemove, () => {
+        void removeOwnerMedia(entry.id);
         setStandardEntries(
           config.type,
           getStandardEntries(config.type).filter((e) => e.id !== entry.id)
@@ -2348,7 +2353,9 @@ function clearCurrentSessionDraft(): void {
   if (!context) {
     return;
   }
-  localStorage.removeItem(formDraftKey(context.objektart, context.protokollart));
+  const sessionKey = formDraftKey(context.objektart, context.protokollart);
+  localStorage.removeItem(sessionKey);
+  void deleteMediaForSession(sessionKey).catch((error) => console.error(error));
 }
 
 function finishProtocolAsPdf(): void {
@@ -2384,6 +2391,7 @@ function finishProtocolAsPdf(): void {
   localStorage.removeItem(STORAGE_KEYS.objektart);
   localStorage.removeItem(STORAGE_KEYS.protokollart);
   setAppSubtitle(DEFAULT_SUBTITLE, false);
+  setAppTitleVisible(true);
   showOnly(viewObjektart);
 }
 
@@ -2411,6 +2419,7 @@ function finishSchluesselAsPdf(): void {
   localStorage.removeItem(STORAGE_KEYS.objektart);
   localStorage.removeItem(STORAGE_KEYS.protokollart);
   setAppSubtitle(DEFAULT_SUBTITLE, false);
+  setAppTitleVisible(true);
   showOnly(viewObjektart);
 }
 
@@ -2532,6 +2541,7 @@ function renderSignatureSection(container: HTMLDivElement, idPrefix: string, onF
 
 function goToProtokollartView(objektart: Objektart): void {
   localStorage.setItem(STORAGE_KEYS.objektart, objektart);
+  setAppTitleVisible(true);
   gewaehlteObjektartHeading.textContent = `Gewählt: ${OBJEKTART_LABELS[objektart]}`;
   showOnly(viewProtokollart);
 }
@@ -2782,8 +2792,21 @@ function setAppSubtitle(text: string, isProtokollart: boolean): void {
   appSubtitle.classList.toggle("is-protokollart", isProtokollart);
 }
 
+function setAppTitleVisible(visible: boolean): void {
+  appTitle.classList.toggle("hidden", !visible);
+}
+
+function protocolSubtitle(objektart: Objektart, protokollart: Protokollart): string {
+  const label = PROTOKOLLART_LABELS[protokollart];
+  if (objektart === "gewerbe" || objektart === "privat") {
+    return `${label} (${OBJEKTART_LABELS[objektart]})`;
+  }
+  return label;
+}
+
 function showFormular(objektart: Objektart, protokollart: Protokollart): void {
-  setAppSubtitle(PROTOKOLLART_LABELS[protokollart], true);
+  setAppSubtitle(protocolSubtitle(objektart, protokollart), true);
+  setAppTitleVisible(false);
   const draft = loadFormDraft(objektart, protokollart);
   hideDraftStatus();
 
@@ -2829,6 +2852,7 @@ function goBackToProtokollartView(): void {
 
   localStorage.removeItem(STORAGE_KEYS.protokollart);
   setAppSubtitle(DEFAULT_SUBTITLE, false);
+  setAppTitleVisible(true);
   gewaehlteObjektartHeading.textContent = `Gewählt: ${OBJEKTART_LABELS[objektart]}`;
   roomsContainer.innerHTML = "";
   metersContainer.innerHTML = "";
@@ -2845,6 +2869,7 @@ function goBackToObjektartView(): void {
   closingContainer.innerHTML = "";
   resetSignatureUiState();
   setAppSubtitle(DEFAULT_SUBTITLE, false);
+  setAppTitleVisible(true);
   showOnly(viewObjektart);
 }
 
