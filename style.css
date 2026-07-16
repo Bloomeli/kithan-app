@@ -336,11 +336,21 @@ body {
     flex: 0 0 auto;
 }
 
+.media-thumb-item--video {
+    width: min(100%, 220px);
+    height: 140px;
+}
+
 .media-thumb {
     display: block;
     width: 100%;
     height: 100%;
     object-fit: cover;
+}
+
+.media-thumb--video {
+    object-fit: contain;
+    background-color: #000;
 }
 
 .media-thumb-badge {

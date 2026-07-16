@@ -33,12 +33,36 @@ function createThumbnailItem(
     img.alt = "Foto-Vorschau";
     item.appendChild(img);
   } else {
+    item.classList.add("media-thumb-item--video");
+
     const video = document.createElement("video");
-    video.className = "media-thumb";
+    video.className = "media-thumb media-thumb--video";
     video.src = objectUrl;
-    video.muted = true;
+    video.controls = true;
     video.playsInline = true;
-    video.preload = "metadata";
+    video.setAttribute("playsinline", "");
+    video.setAttribute("webkit-playsinline", "");
+    video.preload = "auto";
+    video.setAttribute("aria-label", "Video-Vorschau");
+
+    // Many mobile browsers leave a black frame until a seek/play;
+    // nudge currentTime so a real poster frame appears.
+    const paintFrame = (): void => {
+      if (!Number.isFinite(video.duration) || video.duration <= 0) {
+        return;
+      }
+      const target = Math.min(0.1, video.duration * 0.05);
+      if (video.currentTime < target) {
+        try {
+          video.currentTime = target;
+        } catch {
+          // Ignore seek errors on codecs that don't allow it yet.
+        }
+      }
+    };
+    video.addEventListener("loadedmetadata", paintFrame);
+    video.addEventListener("loadeddata", paintFrame);
+
     item.appendChild(video);
 
     const badge = document.createElement("span");
@@ -52,7 +76,11 @@ function createThumbnailItem(
   removeButton.className = "media-thumb-remove";
   removeButton.setAttribute("aria-label", "Medium entfernen");
   removeButton.textContent = "×";
-  removeButton.addEventListener("click", onRemove);
+  removeButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onRemove();
+  });
   item.appendChild(removeButton);
 
   return item;
