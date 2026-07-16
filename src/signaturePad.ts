@@ -7,6 +7,9 @@ export class SignaturePad {
   private lastX = 0;
   private lastY = 0;
   private strokes = 0;
+  /** Last synced CSS pixel size of the canvas element. */
+  private cssWidth = 0;
+  private cssHeight = 0;
   private readonly onPointerDown: (event: PointerEvent) => void;
   private readonly onPointerMove: (event: PointerEvent) => void;
   private readonly onPointerUp: (event: PointerEvent) => void;
@@ -31,6 +34,8 @@ export class SignaturePad {
     canvas.addEventListener("pointercancel", this.onPointerUp);
     canvas.addEventListener("pointerleave", this.onPointerUp);
     window.addEventListener("resize", this.onResize);
+    window.visualViewport?.addEventListener("resize", this.onResize);
+    window.visualViewport?.addEventListener("scroll", this.onResize);
 
     this.resize();
   }
@@ -42,6 +47,8 @@ export class SignaturePad {
     this.canvas.removeEventListener("pointercancel", this.onPointerUp);
     this.canvas.removeEventListener("pointerleave", this.onPointerUp);
     window.removeEventListener("resize", this.onResize);
+    window.visualViewport?.removeEventListener("resize", this.onResize);
+    window.visualViewport?.removeEventListener("scroll", this.onResize);
   }
 
   clear(): void {
@@ -63,10 +70,20 @@ export class SignaturePad {
   private resize(): void {
     const ratio = Math.max(window.devicePixelRatio || 1, 1);
     const rect = this.canvas.getBoundingClientRect();
-    const cssWidth = Math.max(Math.floor(rect.width), 1);
-    const cssHeight = Math.max(Math.floor(rect.height), 1);
+    const cssWidth = Math.max(Math.round(rect.width), 1);
+    const cssHeight = Math.max(Math.round(rect.height), 1);
+
+    if (cssWidth === this.cssWidth && cssHeight === this.cssHeight) {
+      // Size unchanged — still re-apply transform in case context was reset.
+      this.ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      this.applyDrawingStyle();
+      return;
+    }
+
     const snapshot = this.strokes > 0 ? this.canvas.toDataURL("image/png") : null;
 
+    this.cssWidth = cssWidth;
+    this.cssHeight = cssHeight;
     this.canvas.width = Math.floor(cssWidth * ratio);
     this.canvas.height = Math.floor(cssHeight * ratio);
     this.ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -82,6 +99,16 @@ export class SignaturePad {
     }
   }
 
+  /** Ensure backing store matches current CSS size before reading pointer coords. */
+  private syncSizeIfNeeded(): void {
+    const rect = this.canvas.getBoundingClientRect();
+    const cssWidth = Math.max(Math.round(rect.width), 1);
+    const cssHeight = Math.max(Math.round(rect.height), 1);
+    if (cssWidth !== this.cssWidth || cssHeight !== this.cssHeight) {
+      this.resize();
+    }
+  }
+
   private applyDrawingStyle(): void {
     this.ctx.lineCap = "round";
     this.ctx.lineJoin = "round";
@@ -89,6 +116,7 @@ export class SignaturePad {
     this.ctx.lineWidth = 2;
   }
 
+  /** Always use a fresh bounding rect — never cache layout position. */
   private pointerPosition(event: PointerEvent): { x: number; y: number } {
     const rect = this.canvas.getBoundingClientRect();
     return {
@@ -99,6 +127,7 @@ export class SignaturePad {
 
   private handlePointerDown(event: PointerEvent): void {
     event.preventDefault();
+    this.syncSizeIfNeeded();
     this.canvas.setPointerCapture(event.pointerId);
     this.drawing = true;
     const pos = this.pointerPosition(event);
@@ -116,6 +145,7 @@ export class SignaturePad {
       return;
     }
     event.preventDefault();
+    this.syncSizeIfNeeded();
     const pos = this.pointerPosition(event);
     this.ctx.beginPath();
     this.ctx.moveTo(this.lastX, this.lastY);
