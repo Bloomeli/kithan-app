@@ -66,7 +66,9 @@ export async function processCapturedPhoto(file: Blob): Promise<ProcessedMedia> 
   ctx.drawImage(image, 0, 0, width, height);
 
   const blob = await canvasToJpegBlob(canvas, jpegQuality);
-  return { blob, mimeType: "image/jpeg", kind: "photo" };
+  // Re-wrap so IndexedDB stores plain bytes (avoids WebKit blank <img> previews).
+  const stableBlob = new Blob([await blob.arrayBuffer()], { type: "image/jpeg" });
+  return { blob: stableBlob, mimeType: "image/jpeg", kind: "photo" };
 }
 
 /**

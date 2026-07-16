@@ -22,16 +22,41 @@ function isVideoRecord(record: MediaRecord): boolean {
   return record.kind === "video" || record.mimeType.startsWith("video/");
 }
 
-function createThumbnailItem(
+/** Copy blob bytes with an explicit MIME type — fixes WebKit img+IndexedDB blank previews. */
+async function rebuildBlob(blob: Blob, mimeType: string): Promise<Blob> {
+  const type = mimeType || blob.type || "application/octet-stream";
+  const buffer = await blob.arrayBuffer();
+  return new Blob([buffer], { type });
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+      reject(new Error("Data-URL konnte nicht erzeugt werden."));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("FileReader fehlgeschlagen."));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function createThumbnailItem(
   record: MediaRecord,
-  objectUrl: string,
-  onRemove: () => void
-): HTMLDivElement {
+  onRemove: () => void,
+  trackObjectUrl: (url: string) => void
+): Promise<HTMLDivElement> {
   const item = document.createElement("div");
   item.className = "media-thumb-item";
 
   if (isVideoRecord(record)) {
     item.classList.add("media-thumb-item--video");
+
+    const objectUrl = URL.createObjectURL(record.blob);
+    trackObjectUrl(objectUrl);
 
     const video = document.createElement("video");
     video.className = "media-thumb media-thumb--video";
@@ -70,14 +95,28 @@ function createThumbnailItem(
   } else {
     item.classList.add("media-thumb-item--photo");
 
+    const mimeType = record.mimeType || record.blob.type || "image/jpeg";
+    const freshBlob = await rebuildBlob(record.blob, mimeType);
+    const objectUrl = URL.createObjectURL(freshBlob);
+    trackObjectUrl(objectUrl);
+
     const img = document.createElement("img");
     img.className = "media-thumb media-thumb--photo";
-    img.src = objectUrl;
     img.alt = "Foto-Vorschau";
-    // Help browsers pick the right decoder when the blob type is empty.
-    if (record.mimeType.startsWith("image/")) {
-      img.setAttribute("data-mime", record.mimeType);
-    }
+    img.decoding = "async";
+    img.src = objectUrl;
+
+    // Fallback: some WebKit builds still fail on blob: URLs for IDB images.
+    img.addEventListener("error", () => {
+      void blobToDataUrl(freshBlob)
+        .then((dataUrl) => {
+          if (img.src !== dataUrl) {
+            img.src = dataUrl;
+          }
+        })
+        .catch((error) => console.error(error));
+    }, { once: true });
+
     item.appendChild(img);
   }
 
@@ -132,18 +171,25 @@ function bindMediaControls(
     }
 
     for (const record of records) {
-      const url = URL.createObjectURL(record.blob);
-      objectUrls.add(url);
-      thumbs.appendChild(
-        createThumbnailItem(record, url, async () => {
-          try {
-            await deleteMedia(record.id);
-            await reload();
-          } catch (error) {
-            console.error(error);
+      try {
+        const item = await createThumbnailItem(
+          record,
+          async () => {
+            try {
+              await deleteMedia(record.id);
+              await reload();
+            } catch (error) {
+              console.error(error);
+            }
+          },
+          (url) => {
+            objectUrls.add(url);
           }
-        })
-      );
+        );
+        thumbs.appendChild(item);
+      } catch (error) {
+        console.error(error);
+      }
     }
   };
 
