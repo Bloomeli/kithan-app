@@ -44,6 +44,124 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
+/** Corner-bracket icon matching the usual video fullscreen control look. */
+function createExpandIcon(): HTMLSpanElement {
+  const icon = document.createElement("span");
+  icon.className = "media-expand-icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.innerHTML =
+    '<svg viewBox="0 0 24 24" width="16" height="16" focusable="false">' +
+    '<path fill="currentColor" d="M3 9V3h6v2H5v4H3zm6 12H3v-6h2v4h4v2zm12-6v6h-6v-2h4v-4h2zm-6-12h6v6h-2V5h-4V3z"/>' +
+    "</svg>";
+  return icon;
+}
+
+/**
+ * Photo expand/collapse — mirrors native video fullscreen corners via a lightbox
+ * (Fullscreen API is unreliable for <img> on iOS).
+ */
+function createPhotoExpandControl(sourceImg: HTMLImageElement): HTMLButtonElement {
+  const expandButton = document.createElement("button");
+  expandButton.type = "button";
+  expandButton.className = "media-thumb-expand";
+  expandButton.setAttribute("aria-label", "Foto vergrößern");
+  expandButton.setAttribute("aria-expanded", "false");
+  expandButton.appendChild(createExpandIcon());
+
+  let overlay: HTMLDivElement | null = null;
+
+  const closeLightbox = (): void => {
+    if (!overlay) {
+      return;
+    }
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => undefined);
+    }
+    overlay.remove();
+    overlay = null;
+    expandButton.classList.remove("is-expanded");
+    expandButton.setAttribute("aria-label", "Foto vergrößern");
+    expandButton.setAttribute("aria-expanded", "false");
+    document.removeEventListener("keydown", onKeyDown);
+  };
+
+  const onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === "Escape") {
+      closeLightbox();
+    }
+  };
+
+  const openLightbox = (): void => {
+    if (overlay) {
+      return;
+    }
+
+    overlay = document.createElement("div");
+    overlay.className = "media-photo-lightbox";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("aria-label", "Foto-Vollansicht");
+
+    const bigImg = document.createElement("img");
+    bigImg.className = "media-photo-lightbox-img";
+    bigImg.src = sourceImg.currentSrc || sourceImg.src;
+    bigImg.alt = sourceImg.alt || "Foto-Vorschau";
+
+    const collapseButton = document.createElement("button");
+    collapseButton.type = "button";
+    collapseButton.className = "media-thumb-expand is-expanded media-photo-lightbox-toggle";
+    collapseButton.setAttribute("aria-label", "Foto verkleinern");
+    collapseButton.setAttribute("aria-expanded", "true");
+    collapseButton.appendChild(createExpandIcon());
+    collapseButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      closeLightbox();
+    });
+
+    overlay.append(bigImg, collapseButton);
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) {
+        closeLightbox();
+      }
+    });
+
+    document.body.appendChild(overlay);
+    expandButton.classList.add("is-expanded");
+    expandButton.setAttribute("aria-label", "Foto verkleinern");
+    expandButton.setAttribute("aria-expanded", "true");
+    document.addEventListener("keydown", onKeyDown);
+
+    // Prefer real fullscreen where the browser allows it (desktop); overlay remains as base.
+    const root = overlay;
+    const req =
+      root.requestFullscreen?.bind(root) ??
+      (root as HTMLElement & { webkitRequestFullscreen?: () => Promise<void> }).webkitRequestFullscreen?.bind(
+        root
+      );
+    if (req) {
+      void Promise.resolve(req()).catch(() => {
+        /* Overlay already visible — ignore fullscreen rejection (common on iOS). */
+      });
+    }
+  };
+
+  expandButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (overlay) {
+      if (document.fullscreenElement) {
+        void document.exitFullscreen().catch(() => undefined);
+      }
+      closeLightbox();
+      return;
+    }
+    openLightbox();
+  });
+
+  return expandButton;
+}
+
 async function createThumbnailItem(
   record: MediaRecord,
   onRemove: () => void,
@@ -118,6 +236,7 @@ async function createThumbnailItem(
     }, { once: true });
 
     item.appendChild(img);
+    item.appendChild(createPhotoExpandControl(img));
   }
 
   const removeButton = document.createElement("button");
