@@ -41,6 +41,21 @@
                 <h2 class="heading-kopfdaten" style="margin-bottom: 20px;">Kopfdaten</h2>
 
                 <div class="input-group">
+                    <label for="vermieter-auswahl">Vermieter:</label>
+                    <select id="vermieter-auswahl">
+                        <option value="" disabled selected>Bitte Vermieter wählen...</option>
+                        <option value="kithan-grundstuecks-handels">Kithan Grundstücks- und Handels GmbH</option>
+                        <option value="TODO_VERMIETER_FIRMA">TODO_VERMIETER_FIRMA — company name to be confirmed</option>
+                        <option value="kithan-gmbh">Kithan GmbH</option>
+                        <option value="kithan-leopoldstrasse">Kithan Leopoldstraße GmbH</option>
+                        <option value="kithan-erlangen">Kithan Erlangen GmbH</option>
+                        <option value="kithan-erlangen-mvs">Kithan Erlangen MVS GmbH</option>
+                        <option value="kita-projekt-koeln">Kita Projekt Köln</option>
+                        <option value="kithan-koeln-hyazinthenweg">Kithan Köln GmbH Hyazinthenweg</option>
+                    </select>
+                </div>
+
+                <div class="input-group">
                     <label>Name der/des Mieter(s):</label>
                     <input type="text" id="mietername" placeholder="z.B. Max Mustermann">
                 </div>
@@ -50,6 +65,11 @@
                     <select id="gebaeude-auswahl">
                         <option value="" disabled selected>Bitte Gebäude wählen...</option>
                     </select>
+                </div>
+
+                <div class="input-group">
+                    <label for="kopfdaten-bemerkung">Bemerkung:</label>
+                    <input type="text" id="kopfdaten-bemerkung" placeholder="Zusätzliche Bemerkung...">
                 </div>
 
                 <div class="input-group">

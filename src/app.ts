@@ -112,8 +112,10 @@ interface RoomDraft {
 }
 
 interface KopfdatenDraft {
+  vermieter: string;
   mietername: string;
   gebaeudeAuswahl: string;
+  bemerkung: string;
   besichtigungsdatum: string;
   maengelStatus: "" | "keine" | "folgende";
 }
@@ -189,8 +191,10 @@ function formDraftKey(objektart: Objektart, protokollart: Protokollart): string 
 
 function emptyKopfdaten(): KopfdatenDraft {
   return {
+    vermieter: "",
     mietername: "",
     gebaeudeAuswahl: "",
+    bemerkung: "",
     besichtigungsdatum: "",
     maengelStatus: "",
   };
@@ -2570,14 +2574,18 @@ function goToProtokollartView(objektart: Objektart): void {
 }
 
 function restoreKopfdaten(draft: FormDraft): void {
+  const vermieter = requireElement<HTMLSelectElement>("vermieter-auswahl");
   const mietername = requireElement<HTMLInputElement>("mietername");
   const gebaeude = requireElement<HTMLSelectElement>("gebaeude-auswahl");
+  const bemerkung = requireElement<HTMLInputElement>("kopfdaten-bemerkung");
   const datum = requireElement<HTMLInputElement>("besichtigungsdatum");
   const keine = requireElement<HTMLInputElement>("keine-maengel");
   const folgende = requireElement<HTMLInputElement>("folgende-maengel");
 
+  vermieter.value = draft.kopfdaten.vermieter;
   mietername.value = draft.kopfdaten.mietername;
   gebaeude.value = draft.kopfdaten.gebaeudeAuswahl;
+  bemerkung.value = draft.kopfdaten.bemerkung;
   datum.value = draft.kopfdaten.besichtigungsdatum;
   keine.checked = draft.kopfdaten.maengelStatus === "keine";
   folgende.checked = draft.kopfdaten.maengelStatus === "folgende";
@@ -2762,8 +2770,10 @@ function initSchluesselAutosave(): void {
 }
 
 function persistKopfdatenFromDom(): void {
+  const vermieter = requireElement<HTMLSelectElement>("vermieter-auswahl");
   const mietername = requireElement<HTMLInputElement>("mietername");
   const gebaeude = requireElement<HTMLSelectElement>("gebaeude-auswahl");
+  const bemerkung = requireElement<HTMLInputElement>("kopfdaten-bemerkung");
   const datum = requireElement<HTMLInputElement>("besichtigungsdatum");
   const keine = requireElement<HTMLInputElement>("keine-maengel");
   const folgende = requireElement<HTMLInputElement>("folgende-maengel");
@@ -2777,8 +2787,10 @@ function persistKopfdatenFromDom(): void {
 
   updateCurrentFormDraft((draft) => {
     draft.kopfdaten = {
+      vermieter: vermieter.value,
       mietername: mietername.value,
       gebaeudeAuswahl: gebaeude.value,
+      bemerkung: bemerkung.value,
       besichtigungsdatum: datum.value,
       maengelStatus,
     };
@@ -2786,14 +2798,18 @@ function persistKopfdatenFromDom(): void {
 }
 
 function initKopfdatenAutosave(): void {
+  const vermieter = requireElement<HTMLSelectElement>("vermieter-auswahl");
   const mietername = requireElement<HTMLInputElement>("mietername");
   const gebaeude = requireElement<HTMLSelectElement>("gebaeude-auswahl");
+  const bemerkung = requireElement<HTMLInputElement>("kopfdaten-bemerkung");
   const datum = requireElement<HTMLInputElement>("besichtigungsdatum");
   const keine = requireElement<HTMLInputElement>("keine-maengel");
   const folgende = requireElement<HTMLInputElement>("folgende-maengel");
 
+  vermieter.addEventListener("change", persistKopfdatenFromDom);
   mietername.addEventListener("input", persistKopfdatenFromDom);
   gebaeude.addEventListener("change", persistKopfdatenFromDom);
+  bemerkung.addEventListener("input", persistKopfdatenFromDom);
   datum.addEventListener("change", persistKopfdatenFromDom);
   datum.addEventListener("input", persistKopfdatenFromDom);
   keine.addEventListener("change", persistKopfdatenFromDom);
