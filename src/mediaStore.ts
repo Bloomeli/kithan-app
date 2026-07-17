@@ -19,6 +19,13 @@ const DB_NAME = "kithan-media";
 const DB_VERSION = 1;
 const STORE_NAME = "media";
 
+/** Safari often fails the first IndexedDB open after load; retry before surfacing errors. */
+const READY_MAX_ATTEMPTS = 3;
+const READY_RETRY_DELAY_MS = 280;
+
+let mediaDbReady = false;
+let mediaDbReadyInFlight: Promise<void> | null = null;
+
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -52,6 +59,61 @@ function transactionDone(tx: IDBTransaction): Promise<void> {
   });
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/** Lightweight open + no-op read to verify IndexedDB is usable. */
+async function probeMediaDb(): Promise<void> {
+  const db = await openDb();
+  try {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const request = tx.objectStore(STORE_NAME).count();
+    await Promise.all([requestToPromise(request), transactionDone(tx)]);
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Ensure media IndexedDB can open (Safari first-attempt workaround).
+ * Retries silently; only throws after all attempts fail.
+ */
+export async function ensureMediaDbReady(): Promise<void> {
+  if (mediaDbReady) {
+    return;
+  }
+  if (!mediaDbReadyInFlight) {
+    mediaDbReadyInFlight = (async () => {
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= READY_MAX_ATTEMPTS; attempt += 1) {
+        try {
+          await probeMediaDb();
+          mediaDbReady = true;
+          return;
+        } catch (error) {
+          lastError = error;
+          console.warn(
+            `IndexedDB readiness check failed (attempt ${attempt}/${READY_MAX_ATTEMPTS})`,
+            error
+          );
+          if (attempt < READY_MAX_ATTEMPTS) {
+            await delay(READY_RETRY_DELAY_MS);
+          }
+        }
+      }
+      throw lastError instanceof Error
+        ? lastError
+        : new Error("IndexedDB nicht bereit.");
+    })().finally(() => {
+      mediaDbReadyInFlight = null;
+    });
+  }
+  await mediaDbReadyInFlight;
+}
+
 export function createMediaId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -60,6 +122,7 @@ export function createMediaId(): string {
 }
 
 export async function saveMedia(record: MediaRecord): Promise<void> {
+  await ensureMediaDbReady();
   const db = await openDb();
   try {
     const tx = db.transaction(STORE_NAME, "readwrite");
@@ -84,6 +147,7 @@ export async function saveMedia(record: MediaRecord): Promise<void> {
 }
 
 export async function getMediaForOwner(sessionKey: string, ownerKey: string): Promise<MediaRecord[]> {
+  await ensureMediaDbReady();
   const db = await openDb();
   try {
     const tx = db.transaction(STORE_NAME, "readonly");
@@ -97,6 +161,7 @@ export async function getMediaForOwner(sessionKey: string, ownerKey: string): Pr
 }
 
 export async function deleteMedia(id: string): Promise<void> {
+  await ensureMediaDbReady();
   const db = await openDb();
   try {
     const tx = db.transaction(STORE_NAME, "readwrite");
@@ -108,6 +173,7 @@ export async function deleteMedia(id: string): Promise<void> {
 }
 
 export async function deleteMediaForOwner(sessionKey: string, ownerKey: string): Promise<void> {
+  await ensureMediaDbReady();
   const db = await openDb();
   try {
     const tx = db.transaction(STORE_NAME, "readwrite");
@@ -124,6 +190,7 @@ export async function deleteMediaForOwner(sessionKey: string, ownerKey: string):
 }
 
 export async function deleteMediaForSession(sessionKey: string): Promise<void> {
+  await ensureMediaDbReady();
   const db = await openDb();
   try {
     const tx = db.transaction(STORE_NAME, "readwrite");
