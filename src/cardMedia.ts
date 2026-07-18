@@ -2,6 +2,7 @@
 
 import { deleteMedia, getMediaForOwner, type MediaKind, type MediaRecord } from "./mediaStore";
 import { captureAndStoreMedia } from "./mediaService";
+import { MediaCaptureError } from "./mediaDiagnostics";
 
 export interface CardMediaControls {
   root: HTMLDivElement;
@@ -264,10 +265,6 @@ function bindMediaControls(
   photoInput: HTMLInputElement,
   videoInput: HTMLInputElement
 ): () => Promise<void> {
-  const MEDIA_STORAGE_FULL_MESSAGE =
-    "Speichern fehlgeschlagen – möglicherweise ist der Gerätespeicher voll. Bitte Speicherplatz freigeben und erneut versuchen.";
-  const MEDIA_SAVE_FAILED_MESSAGE = "Speichern fehlgeschlagen. Bitte erneut versuchen.";
-
   const errorEl = document.createElement("p");
   errorEl.className = "media-capture-error hidden";
   errorEl.setAttribute("role", "alert");
@@ -279,22 +276,30 @@ function bindMediaControls(
 
   const showCaptureError = (error: unknown): void => {
     console.error(error);
-    const name =
-      error && typeof error === "object" && "name" in error
-        ? String((error as { name: string }).name)
-        : "";
-    const message =
-      error && typeof error === "object" && "message" in error
-        ? String((error as { message: string }).message)
-        : "";
-    const isQuota =
-      name === "QuotaExceededError" ||
-      name === "NS_ERROR_DOM_QUOTA_REACHED" ||
-      /quota|speicherlimit|storage/i.test(`${name} ${message}`);
-    const isIdbWrite =
-      /IndexedDB|IDB|transaction|QuotaExceeded/i.test(`${name} ${message}`);
-    errorEl.textContent =
-      isQuota || isIdbWrite ? MEDIA_STORAGE_FULL_MESSAGE : MEDIA_SAVE_FAILED_MESSAGE;
+    if (error instanceof MediaCaptureError) {
+      errorEl.textContent = error.userMessage;
+    } else {
+      const name =
+        error && typeof error === "object" && "name" in error
+          ? String((error as { name: string }).name)
+          : "Error";
+      const message =
+        error && typeof error === "object" && "message" in error
+          ? String((error as { message: string }).message)
+          : String(error);
+      const isQuota =
+        name === "QuotaExceededError" ||
+        name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+        /quota|speicherlimit|storage/i.test(`${name} ${message}`);
+      errorEl.textContent = isQuota
+        ? [
+            "Speichern fehlgeschlagen – möglicherweise ist der Gerätespeicher voll.",
+            "Bitte Speicherplatz freigeben und erneut versuchen.",
+            `Fehler: ${name}`,
+            `Meldung: ${message}`,
+          ].join("\n")
+        : ["Speichern fehlgeschlagen.", `Fehler: ${name}`, `Meldung: ${message}`].join("\n");
+    }
     errorEl.classList.remove("hidden");
   };
 

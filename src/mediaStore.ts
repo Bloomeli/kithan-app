@@ -3,6 +3,12 @@
  * Capture/processing and upload targets live in mediaProcess / mediaUpload / mediaService.
  */
 
+import {
+  mediaDiagError,
+  mediaDiagLog,
+  type MediaDiagContext,
+} from "./mediaDiagnostics";
+
 export type MediaKind = "photo" | "video";
 
 export interface MediaRecord {
@@ -40,22 +46,28 @@ function openDb(): Promise<IDBDatabase> {
     };
 
     request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("IndexedDB konnte nicht geöffnet werden."));
+    request.onerror = () =>
+      reject(request.error ?? new Error("IndexedDB konnte nicht geöffnet werden."));
+    request.onblocked = () =>
+      reject(new Error("IndexedDB open blocked (andere Tab/Version?)."));
   });
 }
 
 function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("IndexedDB-Anfrage fehlgeschlagen."));
+    request.onerror = () =>
+      reject(request.error ?? new Error("IndexedDB-Anfrage fehlgeschlagen."));
   });
 }
 
 function transactionDone(tx: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error ?? new Error("IndexedDB-Transaktion fehlgeschlagen."));
-    tx.onabort = () => reject(tx.error ?? new Error("IndexedDB-Transaktion abgebrochen."));
+    tx.onerror = () =>
+      reject(tx.error ?? new Error("IndexedDB-Transaktion fehlgeschlagen."));
+    tx.onabort = () =>
+      reject(tx.error ?? new Error("IndexedDB-Transaktion abgebrochen."));
   });
 }
 
@@ -71,6 +83,7 @@ async function probeMediaDb(): Promise<void> {
   try {
     const tx = db.transaction(STORE_NAME, "readonly");
     const request = tx.objectStore(STORE_NAME).count();
+    // Wait only for transaction completion (request is part of same tx).
     await Promise.all([requestToPromise(request), transactionDone(tx)]);
   } finally {
     db.close();
@@ -81,8 +94,11 @@ async function probeMediaDb(): Promise<void> {
  * Ensure media IndexedDB can open (Safari first-attempt workaround).
  * Retries silently; only throws after all attempts fail.
  */
-export async function ensureMediaDbReady(): Promise<void> {
+export async function ensureMediaDbReady(ctx?: MediaDiagContext): Promise<void> {
   if (mediaDbReady) {
+    if (ctx) {
+      mediaDiagLog(ctx, "idb-ready", { cached: true });
+    }
     return;
   }
   if (!mediaDbReadyInFlight) {
@@ -104,14 +120,22 @@ export async function ensureMediaDbReady(): Promise<void> {
           }
         }
       }
-      throw lastError instanceof Error
-        ? lastError
-        : new Error("IndexedDB nicht bereit.");
+      throw lastError instanceof Error ? lastError : new Error("IndexedDB nicht bereit.");
     })().finally(() => {
       mediaDbReadyInFlight = null;
     });
   }
-  await mediaDbReadyInFlight;
+  try {
+    await mediaDbReadyInFlight;
+    if (ctx) {
+      mediaDiagLog(ctx, "idb-ready", { cached: false });
+    }
+  } catch (error) {
+    if (ctx) {
+      mediaDiagError(ctx, "idb-ready", error);
+    }
+    throw error;
+  }
 }
 
 export function createMediaId(): string {
@@ -121,14 +145,79 @@ export function createMediaId(): string {
   return `media-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export async function saveMedia(record: MediaRecord): Promise<void> {
-  await ensureMediaDbReady();
+/** Copy bytes into a plain Blob before IDB put (Safari structured-clone safe). */
+async function cloneBlobForStorage(file: Blob, mimeType: string): Promise<Blob> {
+  const buffer = await file.arrayBuffer();
+  return new Blob([buffer], { type: mimeType || file.type || "application/octet-stream" });
+}
+
+/**
+ * Persist a media record. Blob is cloned to plain ArrayBuffer-backed Blob
+ * BEFORE opening the IDB transaction (Safari-safe; no await mid-transaction).
+ */
+export async function saveMedia(
+  record: MediaRecord,
+  ctx?: MediaDiagContext
+): Promise<void> {
+  await ensureMediaDbReady(ctx);
+
+  let blobToStore: Blob;
+  try {
+    if (ctx) {
+      mediaDiagLog(ctx, "idb-clone-blob", {
+        inType: record.blob.type || "(empty)",
+        inSize: record.blob.size,
+        mimeType: record.mimeType,
+      });
+    }
+    blobToStore = await cloneBlobForStorage(record.blob, record.mimeType);
+    if (ctx) {
+      mediaDiagLog(ctx, "idb-clone-blob", {
+        outType: blobToStore.type || "(empty)",
+        outSize: blobToStore.size,
+      });
+    }
+  } catch (error) {
+    if (ctx) {
+      mediaDiagError(ctx, "idb-clone-blob", error);
+    }
+    // Last resort: try storing the original blob reference.
+    blobToStore = record.blob;
+  }
+
+  const storable: MediaRecord = {
+    id: record.id,
+    sessionKey: record.sessionKey,
+    ownerKey: record.ownerKey,
+    kind: record.kind,
+    mimeType: record.mimeType || blobToStore.type || "application/octet-stream",
+    blob: blobToStore,
+    createdAt: record.createdAt,
+  };
+
   const db = await openDb();
   try {
+    if (ctx) {
+      mediaDiagLog(ctx, "idb-put-start", {
+        id: storable.id,
+        mimeType: storable.mimeType,
+        blobSize: storable.blob.size,
+        blobType: storable.blob.type || "(empty)",
+      });
+    }
+
+    // Open transaction, issue put, then await completion — no other awaits in between.
     const tx = db.transaction(STORE_NAME, "readwrite");
-    const request = tx.objectStore(STORE_NAME).put(record);
+    const request = tx.objectStore(STORE_NAME).put(storable);
     await Promise.all([requestToPromise(request), transactionDone(tx)]);
+
+    if (ctx) {
+      mediaDiagLog(ctx, "idb-put-done", { id: storable.id });
+    }
   } catch (error) {
+    if (ctx) {
+      mediaDiagError(ctx, "idb-put-start", error);
+    }
     const name =
       error && typeof error === "object" && "name" in error
         ? String((error as { name: string }).name)
@@ -139,6 +228,13 @@ export async function saveMedia(record: MediaRecord): Promise<void> {
       );
       quotaError.name = "QuotaExceededError";
       throw quotaError;
+    }
+    if (name === "DataCloneError") {
+      const cloneError = new Error(
+        "DataCloneError: Blob/File konnte nicht in IndexedDB geklont werden."
+      );
+      cloneError.name = "DataCloneError";
+      throw cloneError;
     }
     throw error instanceof Error ? error : new Error("IndexedDB-Schreiben fehlgeschlagen.");
   } finally {
@@ -152,8 +248,8 @@ export async function getMediaForOwner(sessionKey: string, ownerKey: string): Pr
   try {
     const tx = db.transaction(STORE_NAME, "readonly");
     const index = tx.objectStore(STORE_NAME).index("bySessionOwner");
-    const rows = await requestToPromise(index.getAll(IDBKeyRange.only([sessionKey, ownerKey])));
-    await transactionDone(tx);
+    const request = index.getAll(IDBKeyRange.only([sessionKey, ownerKey]));
+    const [rows] = await Promise.all([requestToPromise(request), transactionDone(tx)]);
     return rows.sort((a, b) => a.createdAt - b.createdAt);
   } finally {
     db.close();
@@ -165,8 +261,8 @@ export async function deleteMedia(id: string): Promise<void> {
   const db = await openDb();
   try {
     const tx = db.transaction(STORE_NAME, "readwrite");
-    tx.objectStore(STORE_NAME).delete(id);
-    await transactionDone(tx);
+    const request = tx.objectStore(STORE_NAME).delete(id);
+    await Promise.all([requestToPromise(request), transactionDone(tx)]);
   } finally {
     db.close();
   }
@@ -176,14 +272,22 @@ export async function deleteMediaForOwner(sessionKey: string, ownerKey: string):
   await ensureMediaDbReady();
   const db = await openDb();
   try {
-    const tx = db.transaction(STORE_NAME, "readwrite");
-    const store = tx.objectStore(STORE_NAME);
-    const index = store.index("bySessionOwner");
-    const rows = await requestToPromise(index.getAll(IDBKeyRange.only([sessionKey, ownerKey])));
+    // Read IDs in one transaction, delete in a second — never await between ops in same tx.
+    const readTx = db.transaction(STORE_NAME, "readonly");
+    const index = readTx.objectStore(STORE_NAME).index("bySessionOwner");
+    const readReq = index.getAll(IDBKeyRange.only([sessionKey, ownerKey]));
+    const [rows] = await Promise.all([requestToPromise(readReq), transactionDone(readTx)]);
+
+    if (rows.length === 0) {
+      return;
+    }
+
+    const writeTx = db.transaction(STORE_NAME, "readwrite");
+    const store = writeTx.objectStore(STORE_NAME);
     for (const row of rows) {
       store.delete(row.id);
     }
-    await transactionDone(tx);
+    await transactionDone(writeTx);
   } finally {
     db.close();
   }
@@ -193,14 +297,21 @@ export async function deleteMediaForSession(sessionKey: string): Promise<void> {
   await ensureMediaDbReady();
   const db = await openDb();
   try {
-    const tx = db.transaction(STORE_NAME, "readwrite");
-    const store = tx.objectStore(STORE_NAME);
-    const index = store.index("bySession");
-    const rows = await requestToPromise(index.getAll(sessionKey));
+    const readTx = db.transaction(STORE_NAME, "readonly");
+    const index = readTx.objectStore(STORE_NAME).index("bySession");
+    const readReq = index.getAll(sessionKey);
+    const [rows] = await Promise.all([requestToPromise(readReq), transactionDone(readTx)]);
+
+    if (rows.length === 0) {
+      return;
+    }
+
+    const writeTx = db.transaction(STORE_NAME, "readwrite");
+    const store = writeTx.objectStore(STORE_NAME);
     for (const row of rows) {
       store.delete(row.id);
     }
-    await transactionDone(tx);
+    await transactionDone(writeTx);
   } finally {
     db.close();
   }
