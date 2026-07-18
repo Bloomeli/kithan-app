@@ -44,9 +44,14 @@ export async function captureAndStoreMedia(input: CaptureMediaInput): Promise<Me
       blob: processed.blob,
       createdAt: Date.now(),
     };
-    await saveMedia(record, ctx);
+    // saveMedia detaches bytes, tries Blob then ArrayBuffer, returns normalized record.
+    const saved = await saveMedia(record, ctx);
     await logStorageEstimate(ctx);
-    return record;
+    mediaDiagLog(ctx, "idb-put-done", {
+      storageMode: saved.storageMode ?? "(unknown)",
+      id: saved.id,
+    });
+    return saved;
   } catch (error) {
     mediaDiagError(ctx, "error", error);
     throw new MediaCaptureError(ctx, error);

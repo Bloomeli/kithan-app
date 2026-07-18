@@ -1,16 +1,19 @@
 /**
- * Local IndexedDB persistence for photo/video blobs (session-scoped).
- * Capture/processing and upload targets live in mediaProcess / mediaUpload / mediaService.
+ * Local IndexedDB persistence for photo/video (session-scoped).
+ * Safari/WebKit: never store live File handles; prefer detached Blob, fall back to ArrayBuffer.
  */
 
 import {
+  logStorageEstimate,
   mediaDiagError,
   mediaDiagLog,
+  normalizeError,
   type MediaDiagContext,
 } from "./mediaDiagnostics";
 
 export type MediaKind = "photo" | "video";
 
+/** In-memory / API shape — always exposes a Blob for UI. */
 export interface MediaRecord {
   id: string;
   sessionKey: string;
@@ -19,11 +22,32 @@ export interface MediaRecord {
   mimeType: string;
   blob: Blob;
   createdAt: number;
+  /** Which IndexedDB payload mode succeeded (set after save). */
+  storageMode?: "blob" | "arraybuffer";
+}
+
+/**
+ * Plain object written to IndexedDB — only serializable fields.
+ * No File, URL, DOM, class instance, or stream.
+ */
+interface StoredMediaRecord {
+  id: string;
+  sessionKey: string;
+  ownerKey: string;
+  kind: MediaKind;
+  mimeType: string;
+  createdAt: number;
+  storageMode: "blob" | "arraybuffer";
+  /** Detached Blob (mode blob). */
+  blob?: Blob;
+  /** Raw bytes (mode arraybuffer) — WebKit fallback when Blob put fails. */
+  data?: ArrayBuffer;
 }
 
 const DB_NAME = "kithan-media";
 const DB_VERSION = 1;
 const STORE_NAME = "media";
+const SELFTEST_ID_PREFIX = "__kithan_media_selftest_";
 
 /** Safari often fails the first IndexedDB open after load; retry before surfacing errors. */
 const READY_MAX_ATTEMPTS = 3;
@@ -31,6 +55,7 @@ const READY_RETRY_DELAY_MS = 280;
 
 let mediaDbReady = false;
 let mediaDbReadyInFlight: Promise<void> | null = null;
+let selfTestPromise: Promise<void> | null = null;
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -77,13 +102,26 @@ function delay(ms: number): Promise<void> {
   });
 }
 
+function errorDetail(error: unknown, tx?: IDBTransaction | null): Record<string, unknown> {
+  const err = normalizeError(error);
+  return {
+    errorName: err.name,
+    errorMessage: err.message,
+    errorStack: err.stack ?? "(none)",
+    transactionErrorName: tx?.error?.name ?? null,
+    transactionErrorMessage: tx?.error?.message ?? null,
+    dbName: DB_NAME,
+    dbVersion: DB_VERSION,
+    storeName: STORE_NAME,
+  };
+}
+
 /** Lightweight open + no-op read to verify IndexedDB is usable. */
 async function probeMediaDb(): Promise<void> {
   const db = await openDb();
   try {
     const tx = db.transaction(STORE_NAME, "readonly");
     const request = tx.objectStore(STORE_NAME).count();
-    // Wait only for transaction completion (request is part of same tx).
     await Promise.all([requestToPromise(request), transactionDone(tx)]);
   } finally {
     db.close();
@@ -145,82 +183,229 @@ export function createMediaId(): string {
   return `media-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-/** Copy bytes into a plain Blob before IDB put (Safari structured-clone safe). */
-async function cloneBlobForStorage(file: Blob, mimeType: string): Promise<Blob> {
+/** Detach bytes from File/Blob before any IDB transaction. */
+async function detachBytes(
+  file: Blob,
+  mimeType: string
+): Promise<{ buffer: ArrayBuffer; safeBlob: Blob; mimeType: string }> {
+  const type = mimeType || file.type || "application/octet-stream";
   const buffer = await file.arrayBuffer();
-  return new Blob([buffer], { type: mimeType || file.type || "application/octet-stream" });
+  // New Blob from a copy of the buffer — not the original File/camera handle.
+  const safeBlob = new Blob([buffer.slice(0)], { type });
+  return { buffer: buffer.slice(0), safeBlob, mimeType: type };
+}
+
+function storedToMediaRecord(raw: StoredMediaRecord | MediaRecord): MediaRecord {
+  const stored = raw as StoredMediaRecord;
+  const mimeType = stored.mimeType || "application/octet-stream";
+
+  if (stored.storageMode === "arraybuffer" && stored.data) {
+    return {
+      id: stored.id,
+      sessionKey: stored.sessionKey,
+      ownerKey: stored.ownerKey,
+      kind: stored.kind,
+      mimeType,
+      blob: new Blob([stored.data], { type: mimeType }),
+      createdAt: stored.createdAt,
+      storageMode: "arraybuffer",
+    };
+  }
+
+  // Legacy rows: only `blob` field, or mode blob.
+  const blob =
+    stored.blob ??
+    ((raw as MediaRecord).blob instanceof Blob ? (raw as MediaRecord).blob : null);
+  if (!blob) {
+    throw new Error(`Media-Eintrag ${stored.id} hat keine nutzbaren Daten.`);
+  }
+  return {
+    id: stored.id,
+    sessionKey: stored.sessionKey,
+    ownerKey: stored.ownerKey,
+    kind: stored.kind,
+    mimeType: mimeType || blob.type || "application/octet-stream",
+    blob,
+    createdAt: stored.createdAt,
+    storageMode: stored.storageMode ?? "blob",
+  };
+}
+
+/** Put one plain object; transaction opened only after value is ready. */
+async function putStoredRecord(value: StoredMediaRecord): Promise<void> {
+  const db = await openDb();
+  let tx: IDBTransaction | null = null;
+  try {
+    tx = db.transaction(STORE_NAME, "readwrite");
+    const request = tx.objectStore(STORE_NAME).put(value);
+    await Promise.all([requestToPromise(request), transactionDone(tx)]);
+  } catch (error) {
+    const detail = errorDetail(error, tx);
+    const enriched = new Error(
+      `${normalizeError(error).message} | tx=${String(detail.transactionErrorName)}:${String(detail.transactionErrorMessage)} | key=${value.id} | mode=${value.storageMode}`
+    );
+    enriched.name = normalizeError(error).name || "UnknownError";
+    throw enriched;
+  } finally {
+    db.close();
+  }
 }
 
 /**
- * Persist a media record. Blob is cloned to plain ArrayBuffer-backed Blob
- * BEFORE opening the IDB transaction (Safari-safe; no await mid-transaction).
+ * Persist media: detached Blob first, ArrayBuffer fallback (Safari UnknownError workaround).
  */
 export async function saveMedia(
   record: MediaRecord,
   ctx?: MediaDiagContext
-): Promise<void> {
+): Promise<MediaRecord> {
   await ensureMediaDbReady(ctx);
+  if (ctx) {
+    await logStorageEstimate(ctx);
+  }
 
-  let blobToStore: Blob;
+  // --- All async conversion BEFORE any write transaction ---
+  let detached: { buffer: ArrayBuffer; safeBlob: Blob; mimeType: string };
   try {
     if (ctx) {
       mediaDiagLog(ctx, "idb-clone-blob", {
         inType: record.blob.type || "(empty)",
         inSize: record.blob.size,
         mimeType: record.mimeType,
+        fileCtor: record.blob.constructor?.name ?? "(unknown)",
+        isFile: typeof File !== "undefined" && record.blob instanceof File,
       });
     }
-    blobToStore = await cloneBlobForStorage(record.blob, record.mimeType);
+    detached = await detachBytes(record.blob, record.mimeType);
     if (ctx) {
       mediaDiagLog(ctx, "idb-clone-blob", {
-        outType: blobToStore.type || "(empty)",
-        outSize: blobToStore.size,
+        outType: detached.safeBlob.type || "(empty)",
+        outSize: detached.safeBlob.size,
+        bufferByteLength: detached.buffer.byteLength,
       });
     }
   } catch (error) {
     if (ctx) {
       mediaDiagError(ctx, "idb-clone-blob", error);
     }
-    // Last resort: try storing the original blob reference.
-    blobToStore = record.blob;
+    throw error instanceof Error
+      ? error
+      : new Error("Datei konnte nicht für IndexedDB vorbereitet werden.");
   }
 
-  const storable: MediaRecord = {
+  const baseMeta = {
     id: record.id,
     sessionKey: record.sessionKey,
     ownerKey: record.ownerKey,
     kind: record.kind,
-    mimeType: record.mimeType || blobToStore.type || "application/octet-stream",
-    blob: blobToStore,
+    mimeType: detached.mimeType,
     createdAt: record.createdAt,
   };
 
-  const db = await openDb();
+  // Attempt 1: detached Blob + plain metadata only
+  const blobRecord: StoredMediaRecord = {
+    ...baseMeta,
+    storageMode: "blob",
+    blob: detached.safeBlob,
+  };
+
+  if (ctx) {
+    mediaDiagLog(ctx, "idb-put-start", {
+      attempt: 1,
+      mode: "blob",
+      key: blobRecord.id,
+      mimeType: blobRecord.mimeType,
+      blobSize: detached.safeBlob.size,
+      blobType: detached.safeBlob.type || "(empty)",
+      dbName: DB_NAME,
+      dbVersion: DB_VERSION,
+      storeName: STORE_NAME,
+    });
+  }
+
   try {
+    await putStoredRecord(blobRecord);
+    if (ctx) {
+      mediaDiagLog(ctx, "idb-put-done", { attempt: 1, mode: "blob", key: record.id });
+      await logStorageEstimate(ctx);
+    }
+    return {
+      ...record,
+      mimeType: detached.mimeType,
+      blob: detached.safeBlob,
+      storageMode: "blob",
+    };
+  } catch (blobError) {
     if (ctx) {
       mediaDiagLog(ctx, "idb-put-start", {
-        id: storable.id,
-        mimeType: storable.mimeType,
-        blobSize: storable.blob.size,
-        blobType: storable.blob.type || "(empty)",
+        attempt: 1,
+        mode: "blob",
+        failed: true,
+        ...errorDetail(blobError),
+        key: record.id,
+        fileSize: record.blob.size,
+        fileType: record.blob.type || "(empty)",
+        blobSize: detached.safeBlob.size,
+        blobType: detached.safeBlob.type || "(empty)",
       });
+      console.warn(
+        `[media-diag ${ctx.diagnosisId}] Blob put failed, trying ArrayBuffer fallback`,
+        blobError
+      );
     }
+  }
 
-    // Open transaction, issue put, then await completion — no other awaits in between.
-    const tx = db.transaction(STORE_NAME, "readwrite");
-    const request = tx.objectStore(STORE_NAME).put(storable);
-    await Promise.all([requestToPromise(request), transactionDone(tx)]);
+  // Attempt 2: ArrayBuffer payload (avoids WebKit "preparing Blob/File data" UnknownError)
+  const bufferRecord: StoredMediaRecord = {
+    ...baseMeta,
+    storageMode: "arraybuffer",
+    data: detached.buffer,
+  };
 
+  if (ctx) {
+    mediaDiagLog(ctx, "idb-put-start", {
+      attempt: 2,
+      mode: "arraybuffer",
+      key: bufferRecord.id,
+      mimeType: bufferRecord.mimeType,
+      byteLength: detached.buffer.byteLength,
+      dbName: DB_NAME,
+      dbVersion: DB_VERSION,
+      storeName: STORE_NAME,
+    });
+  }
+
+  try {
+    await putStoredRecord(bufferRecord);
     if (ctx) {
-      mediaDiagLog(ctx, "idb-put-done", { id: storable.id });
+      mediaDiagLog(ctx, "idb-put-done", {
+        attempt: 2,
+        mode: "arraybuffer",
+        key: record.id,
+        note: "ArrayBuffer fallback succeeded",
+      });
+      await logStorageEstimate(ctx);
     }
-  } catch (error) {
+    return {
+      ...record,
+      mimeType: detached.mimeType,
+      blob: new Blob([detached.buffer], { type: detached.mimeType }),
+      storageMode: "arraybuffer",
+    };
+  } catch (bufferError) {
     if (ctx) {
-      mediaDiagError(ctx, "idb-put-start", error);
+      mediaDiagError(ctx, "idb-put-start", bufferError);
+      mediaDiagLog(ctx, "idb-put-start", {
+        attempt: 2,
+        mode: "arraybuffer",
+        failed: true,
+        ...errorDetail(bufferError),
+        key: record.id,
+      });
+      await logStorageEstimate(ctx);
     }
     const name =
-      error && typeof error === "object" && "name" in error
-        ? String((error as { name: string }).name)
+      bufferError && typeof bufferError === "object" && "name" in bufferError
+        ? String((bufferError as { name: string }).name)
         : "";
     if (name === "QuotaExceededError" || name === "NS_ERROR_DOM_QUOTA_REACHED") {
       const quotaError = new Error(
@@ -229,16 +414,9 @@ export async function saveMedia(
       quotaError.name = "QuotaExceededError";
       throw quotaError;
     }
-    if (name === "DataCloneError") {
-      const cloneError = new Error(
-        "DataCloneError: Blob/File konnte nicht in IndexedDB geklont werden."
-      );
-      cloneError.name = "DataCloneError";
-      throw cloneError;
-    }
-    throw error instanceof Error ? error : new Error("IndexedDB-Schreiben fehlgeschlagen.");
-  } finally {
-    db.close();
+    throw bufferError instanceof Error
+      ? bufferError
+      : new Error("IndexedDB-Schreiben fehlgeschlagen (Blob und ArrayBuffer).");
   }
 }
 
@@ -249,8 +427,14 @@ export async function getMediaForOwner(sessionKey: string, ownerKey: string): Pr
     const tx = db.transaction(STORE_NAME, "readonly");
     const index = tx.objectStore(STORE_NAME).index("bySessionOwner");
     const request = index.getAll(IDBKeyRange.only([sessionKey, ownerKey]));
-    const [rows] = await Promise.all([requestToPromise(request), transactionDone(tx)]);
-    return rows.sort((a, b) => a.createdAt - b.createdAt);
+    const [rows] = await Promise.all([
+      requestToPromise(request as IDBRequest<StoredMediaRecord[]>),
+      transactionDone(tx),
+    ]);
+    return rows
+      .filter((row) => !String(row.id).startsWith(SELFTEST_ID_PREFIX))
+      .map((row) => storedToMediaRecord(row))
+      .sort((a, b) => a.createdAt - b.createdAt);
   } finally {
     db.close();
   }
@@ -272,11 +456,13 @@ export async function deleteMediaForOwner(sessionKey: string, ownerKey: string):
   await ensureMediaDbReady();
   const db = await openDb();
   try {
-    // Read IDs in one transaction, delete in a second — never await between ops in same tx.
     const readTx = db.transaction(STORE_NAME, "readonly");
     const index = readTx.objectStore(STORE_NAME).index("bySessionOwner");
     const readReq = index.getAll(IDBKeyRange.only([sessionKey, ownerKey]));
-    const [rows] = await Promise.all([requestToPromise(readReq), transactionDone(readTx)]);
+    const [rows] = await Promise.all([
+      requestToPromise(readReq as IDBRequest<StoredMediaRecord[]>),
+      transactionDone(readTx),
+    ]);
 
     if (rows.length === 0) {
       return;
@@ -300,7 +486,10 @@ export async function deleteMediaForSession(sessionKey: string): Promise<void> {
     const readTx = db.transaction(STORE_NAME, "readonly");
     const index = readTx.objectStore(STORE_NAME).index("bySession");
     const readReq = index.getAll(sessionKey);
-    const [rows] = await Promise.all([requestToPromise(readReq), transactionDone(readTx)]);
+    const [rows] = await Promise.all([
+      requestToPromise(readReq as IDBRequest<StoredMediaRecord[]>),
+      transactionDone(readTx),
+    ]);
 
     if (rows.length === 0) {
       return;
@@ -315,4 +504,57 @@ export async function deleteMediaForSession(sessionKey: string): Promise<void> {
   } finally {
     db.close();
   }
+}
+
+/**
+ * Startup self-test: write + delete a tiny Blob, fall back to ArrayBuffer.
+ * Runs once per page load; failures are logged, not thrown to the UI.
+ */
+export async function runMediaDbSelfTest(): Promise<void> {
+  if (selfTestPromise) {
+    return selfTestPromise;
+  }
+  selfTestPromise = (async () => {
+    const testId = `${SELFTEST_ID_PREFIX}${Date.now()}`;
+    console.info(`[media-selftest] start db=${DB_NAME} v${DB_VERSION} store=${STORE_NAME}`);
+    try {
+      await ensureMediaDbReady();
+      const bytes = new Uint8Array([0x4b, 0x49, 0x54, 0x48, 0x41, 0x4e]); // "KITHAN"
+      const buffer = bytes.buffer.slice(0);
+      const safeBlob = new Blob([buffer], { type: "application/octet-stream" });
+
+      let mode: "blob" | "arraybuffer" = "blob";
+      try {
+        await putStoredRecord({
+          id: testId,
+          sessionKey: "__selftest__",
+          ownerKey: "__selftest__",
+          kind: "photo",
+          mimeType: "application/octet-stream",
+          createdAt: Date.now(),
+          storageMode: "blob",
+          blob: safeBlob,
+        });
+      } catch (blobError) {
+        console.warn("[media-selftest] Blob put failed, trying ArrayBuffer", blobError);
+        mode = "arraybuffer";
+        await putStoredRecord({
+          id: testId,
+          sessionKey: "__selftest__",
+          ownerKey: "__selftest__",
+          kind: "photo",
+          mimeType: "application/octet-stream",
+          createdAt: Date.now(),
+          storageMode: "arraybuffer",
+          data: buffer,
+        });
+      }
+
+      await deleteMedia(testId);
+      console.info(`[media-selftest] OK (storageMode=${mode})`);
+    } catch (error) {
+      console.error("[media-selftest] FAILED", errorDetail(error));
+    }
+  })();
+  return selfTestPromise;
 }

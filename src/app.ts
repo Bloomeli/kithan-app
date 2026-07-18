@@ -3,7 +3,7 @@
 
 import { SignaturePad } from "./signaturePad";
 import { createCardMediaControls, createRoomOkMediaRow } from "./cardMedia";
-import { deleteMediaForOwner, deleteMediaForSession } from "./mediaStore";
+import { deleteMediaForOwner, deleteMediaForSession, runMediaDbSelfTest } from "./mediaStore";
 import {
   generateAndDownloadProtocolPdf,
   generateAndDownloadSchluesselPdf,
@@ -439,6 +439,7 @@ async function removeOwnerMedia(ownerKey: string): Promise<void> {
 
 interface NamedProtocolDraft {
   id: string;
+  name: string;
   createdAt: string;
   updatedAt: string;
   objektart: Objektart;
@@ -470,6 +471,7 @@ function loadNamedDrafts(): NamedProtocolDraft[] {
       return [
         {
           ...item,
+          name: typeof item.name === "string" ? item.name : "",
           objektart: item.objektart,
           protokollart,
         },
@@ -546,6 +548,11 @@ function formatDraftTimestamp(iso: string): string {
 }
 
 function getNamedDraftDisplayTitle(draft: NamedProtocolDraft): string {
+  const customName = draft.name.trim();
+  if (customName) {
+    return customName;
+  }
+
   if (draft.objektart === "schluessel") {
     const mieter = draft.form.schluessel?.mietername.trim() || "";
     if (mieter) {
@@ -630,9 +637,20 @@ function saveCurrentAsNamedDraft(): void {
     return;
   }
 
+  const enteredName = window.prompt("Name für diesen Entwurf (z.B. Sascha, Katrin):");
+  if (enteredName === null) {
+    return;
+  }
+  const name = enteredName.trim();
+  if (!name) {
+    showDraftStatus("Bitte einen Namen für den Entwurf eingeben.", true);
+    return;
+  }
+
   const now = new Date().toISOString();
   const named: NamedProtocolDraft = {
     id: generateId("named-draft"),
+    name,
     createdAt: now,
     updatedAt: now,
     objektart: context.objektart,
@@ -642,7 +660,7 @@ function saveCurrentAsNamedDraft(): void {
 
   drafts.unshift(named);
   saveNamedDrafts(drafts);
-  showDraftStatus("Entwurf gespeichert.");
+  showDraftStatus(`Entwurf „${name}“ gespeichert.`);
 }
 
 function openNamedDraft(draftId: string): void {
@@ -2994,6 +3012,8 @@ function init(): void {
   populateGebaeudeSelect();
   initEventListeners();
   restoreSelection();
+  // Safari/WebKit: verify Blob/ArrayBuffer IDB write path early (log-only).
+  void runMediaDbSelfTest();
 }
 
 document.addEventListener("DOMContentLoaded", init);

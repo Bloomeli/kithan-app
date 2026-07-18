@@ -579,7 +579,8 @@ body {
 }
 
 /* Native Select: eigener Pfeil etwas einwärts, damit er gut tippbar bleibt. */
-#gebaeude-auswahl {
+#gebaeude-auswahl,
+#vermieter-auswahl {
     appearance: none;
     -webkit-appearance: none;
     -moz-appearance: none;
