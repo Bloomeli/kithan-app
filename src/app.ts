@@ -589,6 +589,7 @@ function syncCurrentFormToSessionDraft(): FormDraft | null {
       persistGarageRooms();
     } else if (context.objektart === "gewerbe") {
       persistBueroRooms();
+      persistWeitereRaeume();
       persistMeters();
       persistClosing();
     } else if (context.objektart === "privat") {
@@ -788,8 +789,8 @@ const STANDARD_METER_SECTIONS: StandardMeterSectionConfig[] = [
   },
   {
     type: "waermepumpe",
-    title: "Wärmepumpe",
-    addButtonLabel: "+ Weiteren Wärmepumpenzähler hinzufügen",
+    title: "WMZ",
+    addButtonLabel: "+ Weiteren WMZ hinzufügen",
     withLocation: false,
   },
   {
@@ -855,7 +856,7 @@ const MAX_SCHLUESSEL_ENTRIES = 2;
 let weitereRaumState: WeitereRaumEntry[] = [];
 
 const MAX_BUERO_ROOMS = 6;
-const MAX_WEITERE_RAEUME = 4;
+const MAX_WEITERE_RAEUME = 5;
 
 function createGarageRoomEntry(): GarageRoomEntry {
   return { id: generateId("garage-room"), ok: false, ausstattung: "", maengel: "", bemerkungen: "" };
@@ -1156,13 +1157,29 @@ function createStaticRoomCard(raum: RaumConfig, number: number, roomDraft: RoomD
   return card;
 }
 
+function loadWeitereRaumState(draft: FormDraft): void {
+  weitereRaumState = draft.weitereRaeume
+    ? (JSON.parse(JSON.stringify(draft.weitereRaeume)) as WeitereRaumEntry[]).map(normalizeExpandableRoomEntry)
+    : createInitialWeitereRaeume(draft);
+
+  if (weitereRaumState.length > MAX_WEITERE_RAEUME) {
+    weitereRaumState = weitereRaumState.slice(0, MAX_WEITERE_RAEUME);
+  }
+
+  if (!draft.weitereRaeume) {
+    persistWeitereRaeume();
+  }
+}
+
 function createWeitereRaumCard(
   entry: WeitereRaumEntry,
   index: number,
   showRemove: boolean,
   onRemove: () => void
 ): HTMLDivElement {
-  const { card, body } = createCollapsibleRoomCard(`Weitere Räume ${index + 1}`);
+  const { card, body, collapse } = createCollapsibleRoomCard(`Weiterer Raum ${index + 1}`);
+
+  collapse();
 
   body.appendChild(
     createTextareaGroup(
@@ -1214,11 +1231,7 @@ function createWeitereRaumCard(
     )
   );
 
-  if (showRemove) {
-    const removeButton = createRemoveButton(onRemove);
-    removeButton.textContent = "Raum entfernen";
-    body.appendChild(removeButton);
-  }
+  body.appendChild(createMeterFooter(showRemove, onRemove, collapse, "Raum entfernen"));
 
   return card;
 }
@@ -1227,6 +1240,13 @@ function appendWeitereRaeumeBlock(): void {
   const wrapper = document.createElement("div");
   wrapper.id = "weitere-raeume-block";
 
+  const rerender = (): void => {
+    const context = getCurrentFormContext();
+    if (context) {
+      renderRooms(context.objektart);
+    }
+  };
+
   weitereRaumState.forEach((entry, index) => {
     const showRemove = weitereRaumState.length > 1;
     wrapper.appendChild(
@@ -1234,7 +1254,7 @@ function appendWeitereRaeumeBlock(): void {
         void removeOwnerMedia(entry.id);
         weitereRaumState = weitereRaumState.filter((e) => e.id !== entry.id);
         persistWeitereRaeume();
-        renderRooms("privat");
+        rerender();
       })
     );
   });
@@ -1250,7 +1270,7 @@ function appendWeitereRaeumeBlock(): void {
       }
       weitereRaumState.push(createWeitereRaumEntry());
       persistWeitereRaeume();
-      renderRooms("privat");
+      rerender();
     });
     wrapper.appendChild(addButton);
   }
@@ -1259,17 +1279,7 @@ function appendWeitereRaeumeBlock(): void {
 }
 
 function renderPrivatRooms(draft: FormDraft): void {
-  weitereRaumState = draft.weitereRaeume
-    ? (JSON.parse(JSON.stringify(draft.weitereRaeume)) as WeitereRaumEntry[]).map(normalizeExpandableRoomEntry)
-    : createInitialWeitereRaeume(draft);
-
-  if (weitereRaumState.length > MAX_WEITERE_RAEUME) {
-    weitereRaumState = weitereRaumState.slice(0, MAX_WEITERE_RAEUME);
-  }
-
-  if (!draft.weitereRaeume) {
-    persistWeitereRaeume();
-  }
+  loadWeitereRaumState(draft);
 
   RAEUME.privat.forEach((raum, index) => {
     roomsContainer.appendChild(createStaticRoomCard(raum, index + 1, draft.rooms[raum.id] ?? emptyRoomDraft()));
@@ -1392,6 +1402,8 @@ function renderGewerbeRooms(draft: FormDraft): void {
     persistBueroRooms();
   }
 
+  loadWeitereRaumState(draft);
+
   let number = 1;
   RAEUME.gewerbe.forEach((raum) => {
     roomsContainer.appendChild(createStaticRoomCard(raum, number, draft.rooms[raum.id] ?? emptyRoomDraft()));
@@ -1400,6 +1412,7 @@ function renderGewerbeRooms(draft: FormDraft): void {
       appendBueroRoomsBlock();
     }
   });
+  appendWeitereRaeumeBlock();
 }
 
 function createGarageRoomCard(
@@ -1617,13 +1630,15 @@ function createRemoveButton(onClick: () => void): HTMLButtonElement {
 function createMeterFooter(
   showRemove: boolean,
   onRemove: () => void,
-  onConfirm: () => void
+  onConfirm: () => void,
+  removeLabel = "Zähler entfernen"
 ): HTMLDivElement {
   const footer = document.createElement("div");
   footer.className = showRemove ? "meter-card-footer" : "meter-card-footer meter-card-footer--confirm-only";
 
   if (showRemove) {
     const removeButton = createRemoveButton(onRemove);
+    removeButton.textContent = removeLabel;
     removeButton.classList.add("meter-footer-btn");
     footer.appendChild(removeButton);
   }
@@ -1740,6 +1755,10 @@ function createStandardMeterCard(
   const media = createCardMediaControls(getMediaSessionKey, entry.id);
   media.root.classList.add("card-media--meter");
   body.appendChild(media.root);
+
+  if (config.type === "gas") {
+    collapse();
+  }
 
   if (config.withLocation) {
     body.appendChild(
@@ -2219,7 +2238,7 @@ function collectRoomsForPdf(
     });
     (form.weitereRaeume ?? []).forEach((entry, index) => {
       rooms.push({
-        label: `Weitere Räume ${index + 1}`,
+        label: `Weiterer Raum ${index + 1}`,
         ok: entry.ok,
         ausstattung: entry.ausstattung,
         maengel: entry.maengel,
@@ -2260,6 +2279,15 @@ function collectRoomsForPdf(
       ausstattung: room.ausstattung,
       maengel: room.maengel,
       bemerkungen: room.bemerkungen,
+    });
+  });
+  (form.weitereRaeume ?? []).forEach((entry, index) => {
+    rooms.push({
+      label: `Weiterer Raum ${index + 1}`,
+      ok: entry.ok,
+      ausstattung: entry.ausstattung,
+      maengel: entry.maengel,
+      bemerkungen: entry.bemerkungen,
     });
   });
 
