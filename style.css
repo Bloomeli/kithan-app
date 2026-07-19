@@ -355,10 +355,19 @@ body {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+    align-items: flex-start;
 }
 
 .media-thumb-list:empty {
     display: none;
+}
+
+.media-thumb-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 0 0 auto;
+    max-width: min(100%, 220px);
 }
 
 .media-thumb-item {
@@ -370,6 +379,36 @@ body {
     border: 1px solid #555;
     background-color: #000;
     flex: 0 0 auto;
+}
+
+.media-upload-status {
+    font-size: 0.75rem;
+    line-height: 1.35;
+    text-align: left;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.media-upload-status.is-uploading {
+    color: var(--text-color);
+}
+
+.media-upload-status.is-success {
+    color: var(--neon-green);
+}
+
+.media-upload-status.is-error {
+    color: var(--neon-purple);
+}
+
+.media-upload-status-message {
+    margin: 0 0 6px;
+}
+
+.media-upload-retry {
+    width: 100%;
+    min-height: 28px;
+    font-size: 0.75rem;
 }
 
 .media-thumb-item--video {

@@ -1,7 +1,14 @@
-/** Foto/Video capture controls for room and meter cards (local IndexedDB only). */
+/** Foto/Video capture controls for room and meter cards (IndexedDB + NAS upload). */
 
-import { deleteMedia, getMediaForOwner, type MediaKind, type MediaRecord } from "./mediaStore";
-import { captureAndStoreMedia } from "./mediaService";
+import {
+  deleteMedia,
+  getMediaById,
+  getMediaForOwner,
+  updateMediaUploadState,
+  type MediaKind,
+  type MediaRecord,
+} from "./mediaStore";
+import { captureAndStoreMedia, uploadMediaRecord } from "./mediaService";
 import { MediaCaptureError } from "./mediaDiagnostics";
 
 export interface CardMediaControls {
@@ -163,11 +170,67 @@ function createPhotoExpandControl(sourceImg: HTMLImageElement): HTMLButtonElemen
   return expandButton;
 }
 
+function createUploadStatusRow(
+  record: MediaRecord,
+  onRetry: () => void
+): HTMLDivElement | null {
+  const status = record.uploadStatus;
+  if (!status || status === "pending") {
+    return null;
+  }
+
+  const row = document.createElement("div");
+  row.className = "media-upload-status";
+
+  if (status === "uploading") {
+    row.classList.add("is-uploading");
+    row.textContent = "Wird auf NAS hochgeladen…";
+    return row;
+  }
+
+  if (status === "uploaded") {
+    row.classList.add("is-success");
+    row.textContent = "Auf NAS gespeichert";
+    return row;
+  }
+
+  if (status === "failed") {
+    row.classList.add("is-error");
+    const message = document.createElement("p");
+    message.className = "media-upload-status-message";
+    message.textContent = [
+      "NAS-Upload fehlgeschlagen — Datei bleibt lokal gespeichert.",
+      record.uploadError ? `Meldung: ${record.uploadError}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    row.appendChild(message);
+
+    const retryButton = document.createElement("button");
+    retryButton.type = "button";
+    retryButton.className = "btn-media media-upload-retry";
+    retryButton.textContent = "Erneut hochladen";
+    retryButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onRetry();
+    });
+    row.appendChild(retryButton);
+    return row;
+  }
+
+  return null;
+}
+
 async function createThumbnailItem(
   record: MediaRecord,
   onRemove: () => void,
+  onRetryUpload: () => void,
   trackObjectUrl: (url: string) => void
 ): Promise<HTMLDivElement> {
+  const wrap = document.createElement("div");
+  wrap.className = "media-thumb-wrap";
+
   const item = document.createElement("div");
   item.className = "media-thumb-item";
 
@@ -251,8 +314,14 @@ async function createThumbnailItem(
     onRemove();
   });
   item.appendChild(removeButton);
+  wrap.appendChild(item);
 
-  return item;
+  const uploadStatus = createUploadStatusRow(record, onRetryUpload);
+  if (uploadStatus) {
+    wrap.appendChild(uploadStatus);
+  }
+
+  return wrap;
 }
 
 function bindMediaControls(
@@ -303,6 +372,15 @@ function bindMediaControls(
     errorEl.classList.remove("hidden");
   };
 
+  const showUploadError = (message: string): void => {
+    errorEl.textContent = [
+      "NAS-Upload fehlgeschlagen — die Datei bleibt lokal gespeichert.",
+      "Sie können den Upload erneut versuchen.",
+      `Meldung: ${message}`,
+    ].join("\n");
+    errorEl.classList.remove("hidden");
+  };
+
   const clearCaptureError = (): void => {
     errorEl.textContent = "";
     errorEl.classList.add("hidden");
@@ -345,6 +423,27 @@ function bindMediaControls(
               console.error(error);
             }
           },
+          () => {
+            void (async () => {
+              clearCaptureError();
+              try {
+                await updateMediaUploadState(record.id, {
+                  uploadStatus: "uploading",
+                  uploadError: "",
+                });
+                await reload();
+                const fresh = (await getMediaById(record.id)) ?? record;
+                await uploadMediaRecord(fresh);
+                clearCaptureError();
+                await reload();
+              } catch (error) {
+                const message =
+                  error instanceof Error ? error.message : "NAS-Upload fehlgeschlagen.";
+                showUploadError(message);
+                await reload();
+              }
+            })();
+          },
           (url) => {
             objectUrls.add(url);
           }
@@ -368,9 +467,13 @@ function bindMediaControls(
 
     clearCaptureError();
     try {
-      await captureAndStoreMedia({ sessionKey, ownerKey, kind, file });
-      clearCaptureError();
+      const result = await captureAndStoreMedia({ sessionKey, ownerKey, kind, file });
       await reload();
+      if (!result.uploadOk) {
+        showUploadError(result.uploadError ?? "NAS-Upload fehlgeschlagen.");
+      } else {
+        clearCaptureError();
+      }
     } catch (error) {
       showCaptureError(error);
     }

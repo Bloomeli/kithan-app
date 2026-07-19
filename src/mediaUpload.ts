@@ -1,28 +1,32 @@
 /**
  * Swappable upload adapters. Active target comes from MEDIA_CONFIG.uploadTarget.
- * Local-only for now; NAS/HTTP adapters can be plugged in without touching UI.
+ * NAS credentials never live here — only the same-origin Vercel proxy endpoint.
  */
 
 import { MEDIA_CONFIG, type MediaUploadTargetConfig, type UploadTargetKind } from "./mediaConfig";
 import type { MediaRecord } from "./mediaStore";
 
+export interface MediaUploadResult {
+  remotePath?: string;
+}
+
 export interface MediaUploadAdapter {
   readonly kind: UploadTargetKind;
   /**
    * Push one stored media record to the configured remote.
-   * local-only: no-op. Future NAS/cloud: implement transfer here.
+   * local-only: no-op. NAS: POST bytes to the serverless WebDAV proxy.
    */
-  upload(record: MediaRecord): Promise<void>;
+  upload(record: MediaRecord): Promise<MediaUploadResult>;
   /** Optional batch helper for a later sync step. */
-  uploadMany?(records: MediaRecord[]): Promise<void>;
+  uploadMany?(records: MediaRecord[]): Promise<MediaUploadResult[]>;
 }
 
 class LocalOnlyUploadAdapter implements MediaUploadAdapter {
   readonly kind = "local-only" as const;
 
-  async upload(record: MediaRecord): Promise<void> {
+  async upload(record: MediaRecord): Promise<MediaUploadResult> {
     void record;
-    // Intentionally empty — media stays on-device until a remote target is configured.
+    return {};
   }
 }
 
@@ -31,7 +35,7 @@ class HttpUploadAdapter implements MediaUploadAdapter {
 
   constructor(private readonly config: MediaUploadTargetConfig) {}
 
-  async upload(record: MediaRecord): Promise<void> {
+  async upload(record: MediaRecord): Promise<MediaUploadResult> {
     void record;
     throw new Error(
       `HTTP-Upload ist noch nicht implementiert (endpoint: ${this.config.endpoint ?? "—"}).`
@@ -44,11 +48,39 @@ class NasUploadAdapter implements MediaUploadAdapter {
 
   constructor(private readonly config: MediaUploadTargetConfig) {}
 
-  async upload(record: MediaRecord): Promise<void> {
-    void record;
-    throw new Error(
-      `NAS-Upload ist noch nicht implementiert (endpoint: ${this.config.endpoint ?? "—"}).`
-    );
+  async upload(record: MediaRecord): Promise<MediaUploadResult> {
+    const endpoint = this.config.endpoint?.trim();
+    if (!endpoint) {
+      throw new Error("NAS-Upload-Endpoint ist nicht konfiguriert.");
+    }
+
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": record.mimeType || record.blob.type || "application/octet-stream",
+        "X-Kithan-Media-Id": record.id,
+        "X-Kithan-Kind": record.kind,
+        "X-Kithan-Owner": record.ownerKey,
+        "X-Kithan-Session": record.sessionKey,
+      },
+      body: record.blob,
+    });
+
+    let payload: { ok?: boolean; error?: string; remotePath?: string } = {};
+    try {
+      payload = (await response.json()) as typeof payload;
+    } catch {
+      // non-JSON error body
+    }
+
+    if (!response.ok || payload.ok === false) {
+      const message =
+        payload.error?.trim() ||
+        `NAS-Upload fehlgeschlagen (HTTP ${response.status}).`;
+      throw new Error(message);
+    }
+
+    return { remotePath: payload.remotePath };
   }
 }
 

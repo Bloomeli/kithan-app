@@ -13,6 +13,9 @@ import {
 
 export type MediaKind = "photo" | "video";
 
+/** NAS upload lifecycle — local IndexedDB always keeps the blob regardless of status. */
+export type MediaUploadStatus = "pending" | "uploading" | "uploaded" | "failed";
+
 /** In-memory / API shape — always exposes a Blob for UI. */
 export interface MediaRecord {
   id: string;
@@ -24,6 +27,9 @@ export interface MediaRecord {
   createdAt: number;
   /** Which IndexedDB payload mode succeeded (set after save). */
   storageMode?: "blob" | "arraybuffer";
+  uploadStatus?: MediaUploadStatus;
+  uploadError?: string;
+  remotePath?: string;
 }
 
 /**
@@ -42,6 +48,9 @@ interface StoredMediaRecord {
   blob?: Blob;
   /** Raw bytes (mode arraybuffer) — WebKit fallback when Blob put fails. */
   data?: ArrayBuffer;
+  uploadStatus?: MediaUploadStatus;
+  uploadError?: string;
+  remotePath?: string;
 }
 
 const DB_NAME = "kithan-media";
@@ -195,6 +204,17 @@ async function detachBytes(
   return { buffer: buffer.slice(0), safeBlob, mimeType: type };
 }
 
+function uploadFieldsFromStored(stored: StoredMediaRecord): Pick<
+  MediaRecord,
+  "uploadStatus" | "uploadError" | "remotePath"
+> {
+  return {
+    uploadStatus: stored.uploadStatus,
+    uploadError: stored.uploadError,
+    remotePath: stored.remotePath,
+  };
+}
+
 function storedToMediaRecord(raw: StoredMediaRecord | MediaRecord): MediaRecord {
   const stored = raw as StoredMediaRecord;
   const mimeType = stored.mimeType || "application/octet-stream";
@@ -209,6 +229,7 @@ function storedToMediaRecord(raw: StoredMediaRecord | MediaRecord): MediaRecord 
       blob: new Blob([stored.data], { type: mimeType }),
       createdAt: stored.createdAt,
       storageMode: "arraybuffer",
+      ...uploadFieldsFromStored(stored),
     };
   }
 
@@ -228,6 +249,7 @@ function storedToMediaRecord(raw: StoredMediaRecord | MediaRecord): MediaRecord 
     blob,
     createdAt: stored.createdAt,
     storageMode: stored.storageMode ?? "blob",
+    ...uploadFieldsFromStored(stored),
   };
 }
 
@@ -299,6 +321,9 @@ export async function saveMedia(
     kind: record.kind,
     mimeType: detached.mimeType,
     createdAt: record.createdAt,
+    uploadStatus: record.uploadStatus ?? ("pending" as MediaUploadStatus),
+    uploadError: record.uploadError,
+    remotePath: record.remotePath,
   };
 
   // Attempt 1: detached Blob + plain metadata only
@@ -333,6 +358,9 @@ export async function saveMedia(
       mimeType: detached.mimeType,
       blob: detached.safeBlob,
       storageMode: "blob",
+      uploadStatus: baseMeta.uploadStatus,
+      uploadError: baseMeta.uploadError,
+      remotePath: baseMeta.remotePath,
     };
   } catch (blobError) {
     if (ctx) {
@@ -390,6 +418,9 @@ export async function saveMedia(
       mimeType: detached.mimeType,
       blob: new Blob([detached.buffer], { type: detached.mimeType }),
       storageMode: "arraybuffer",
+      uploadStatus: baseMeta.uploadStatus,
+      uploadError: baseMeta.uploadError,
+      remotePath: baseMeta.remotePath,
     };
   } catch (bufferError) {
     if (ctx) {
@@ -418,6 +449,68 @@ export async function saveMedia(
       ? bufferError
       : new Error("IndexedDB-Schreiben fehlgeschlagen (Blob und ArrayBuffer).");
   }
+}
+
+export async function getMediaById(id: string): Promise<MediaRecord | null> {
+  await ensureMediaDbReady();
+  const db = await openDb();
+  try {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const request = tx.objectStore(STORE_NAME).get(id);
+    const [row] = await Promise.all([
+      requestToPromise(request as IDBRequest<StoredMediaRecord | undefined>),
+      transactionDone(tx),
+    ]);
+    if (!row || String(row.id).startsWith(SELFTEST_ID_PREFIX)) {
+      return null;
+    }
+    return storedToMediaRecord(row);
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Update upload metadata only — keeps the existing blob/ArrayBuffer payload intact.
+ * Read and write use separate transactions so awaits cannot invalidate the write tx.
+ */
+export async function updateMediaUploadState(
+  id: string,
+  state: {
+    uploadStatus: MediaUploadStatus;
+    uploadError?: string;
+    remotePath?: string;
+  }
+): Promise<MediaRecord | null> {
+  await ensureMediaDbReady();
+
+  const db = await openDb();
+  let existing: StoredMediaRecord | undefined;
+  try {
+    const readTx = db.transaction(STORE_NAME, "readonly");
+    const request = readTx.objectStore(STORE_NAME).get(id);
+    const [row] = await Promise.all([
+      requestToPromise(request as IDBRequest<StoredMediaRecord | undefined>),
+      transactionDone(readTx),
+    ]);
+    existing = row;
+  } finally {
+    db.close();
+  }
+
+  if (!existing) {
+    return null;
+  }
+
+  const next: StoredMediaRecord = {
+    ...existing,
+    uploadStatus: state.uploadStatus,
+    uploadError: state.uploadError ?? "",
+    remotePath: state.remotePath ?? existing.remotePath,
+  };
+
+  await putStoredRecord(next);
+  return storedToMediaRecord(next);
 }
 
 export async function getMediaForOwner(sessionKey: string, ownerKey: string): Promise<MediaRecord[]> {

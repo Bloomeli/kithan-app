@@ -7,9 +7,9 @@ export type UploadTargetKind = "local-only" | "http" | "nas";
 
 export interface MediaUploadTargetConfig {
   kind: UploadTargetKind;
-  /** Base URL / share path — meaning depends on `kind` (exact protocol TBD). */
+  /** Browser-facing proxy endpoint (never the NAS URL or credentials). */
   endpoint?: string;
-  /** Free-form adapter options (auth headers, share name, etc.). */
+  /** Free-form adapter options (non-secret). */
   options?: Record<string, string>;
 }
 
@@ -43,6 +43,7 @@ export const MEDIA_CONFIG: MediaConfig = {
     reencode: false,
   },
   uploadTarget: {
-    kind: "local-only",
+    kind: "nas",
+    endpoint: "/api/nas-upload",
   },
 };
