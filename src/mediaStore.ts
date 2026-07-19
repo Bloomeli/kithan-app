@@ -471,8 +471,46 @@ export async function getMediaById(id: string): Promise<MediaRecord | null> {
 }
 
 /**
- * Update upload metadata only — keeps the existing blob/ArrayBuffer payload intact.
- * Read and write use separate transactions so awaits cannot invalidate the write tx.
+ * Fresh read + detach bytes into a new Blob safe for fetch()/IDB writes.
+ * Never reuses a live IDB Blob handle across closed transactions.
+ */
+export async function loadMediaForUpload(id: string): Promise<MediaRecord | null> {
+  const record = await getMediaById(id);
+  if (!record) {
+    return null;
+  }
+  const detached = await detachBytes(record.blob, record.mimeType);
+  return {
+    ...record,
+    mimeType: detached.mimeType,
+    blob: detached.safeBlob,
+  };
+}
+
+async function payloadFromStored(
+  existing: StoredMediaRecord
+): Promise<{ buffer: ArrayBuffer; safeBlob: Blob; mimeType: string }> {
+  const mimeType = existing.mimeType || "application/octet-stream";
+  if (existing.storageMode === "arraybuffer" && existing.data) {
+    const buffer = existing.data.slice(0);
+    return {
+      buffer,
+      safeBlob: new Blob([buffer.slice(0)], { type: mimeType }),
+      mimeType,
+    };
+  }
+  const blob = existing.blob;
+  if (!blob) {
+    throw new Error(`Media-Eintrag ${existing.id} hat keine nutzbaren Daten.`);
+  }
+  // Detach before any write — WebKit fails when re-putting a Blob just read from IDB.
+  return detachBytes(blob, mimeType);
+}
+
+/**
+ * Update upload metadata. Re-writes media bytes only after detaching them
+ * (Blob put, then ArrayBuffer fallback) so Safari does not hit
+ * "Error preparing Blob/File data to be stored".
  */
 export async function updateMediaUploadState(
   id: string,
@@ -502,15 +540,43 @@ export async function updateMediaUploadState(
     return null;
   }
 
-  const next: StoredMediaRecord = {
-    ...existing,
+  // Finish all async conversion before opening a write transaction.
+  const detached = await payloadFromStored(existing);
+  const baseMeta = {
+    id: existing.id,
+    sessionKey: existing.sessionKey,
+    ownerKey: existing.ownerKey,
+    kind: existing.kind,
+    mimeType: detached.mimeType,
+    createdAt: existing.createdAt,
     uploadStatus: state.uploadStatus,
     uploadError: state.uploadError ?? "",
     remotePath: state.remotePath ?? existing.remotePath,
   };
 
-  await putStoredRecord(next);
-  return storedToMediaRecord(next);
+  const blobRecord: StoredMediaRecord = {
+    ...baseMeta,
+    storageMode: "blob",
+    blob: detached.safeBlob,
+  };
+
+  try {
+    await putStoredRecord(blobRecord);
+    return storedToMediaRecord(blobRecord);
+  } catch (blobError) {
+    console.warn(
+      `[media-store] upload-state Blob put failed for ${id}, trying ArrayBuffer`,
+      blobError
+    );
+  }
+
+  const bufferRecord: StoredMediaRecord = {
+    ...baseMeta,
+    storageMode: "arraybuffer",
+    data: detached.buffer,
+  };
+  await putStoredRecord(bufferRecord);
+  return storedToMediaRecord(bufferRecord);
 }
 
 export async function getMediaForOwner(sessionKey: string, ownerKey: string): Promise<MediaRecord[]> {

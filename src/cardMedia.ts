@@ -1,13 +1,6 @@
 /** Foto/Video capture controls for room and meter cards (IndexedDB + NAS upload). */
 
-import {
-  deleteMedia,
-  getMediaById,
-  getMediaForOwner,
-  updateMediaUploadState,
-  type MediaKind,
-  type MediaRecord,
-} from "./mediaStore";
+import { deleteMedia, getMediaForOwner, type MediaKind, type MediaRecord } from "./mediaStore";
 import { captureAndStoreMedia, uploadMediaRecord } from "./mediaService";
 import { MediaCaptureError } from "./mediaDiagnostics";
 
@@ -427,13 +420,8 @@ function bindMediaControls(
             void (async () => {
               clearCaptureError();
               try {
-                await updateMediaUploadState(record.id, {
-                  uploadStatus: "uploading",
-                  uploadError: "",
-                });
-                await reload();
-                const fresh = (await getMediaById(record.id)) ?? record;
-                await uploadMediaRecord(fresh);
+                // uploadMediaRecord re-reads + detaches from IndexedDB itself.
+                await uploadMediaRecord(record.id);
                 clearCaptureError();
                 await reload();
               } catch (error) {

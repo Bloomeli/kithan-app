@@ -6,6 +6,7 @@
 import {
   createMediaId,
   getMediaById,
+  loadMediaForUpload,
   saveMedia,
   updateMediaUploadState,
   type MediaKind,
@@ -42,32 +43,43 @@ function uploadEnabled(): boolean {
 
 /**
  * Upload a record that is already safely in IndexedDB.
- * Updates uploadStatus in IDB; does not remove local media on failure.
+ * Always re-reads + detaches bytes before status writes and the NAS fetch.
  */
-export async function uploadMediaRecord(record: MediaRecord): Promise<MediaRecord> {
+export async function uploadMediaRecord(recordOrId: MediaRecord | string): Promise<MediaRecord> {
+  const id = typeof recordOrId === "string" ? recordOrId : recordOrId.id;
+
+  // Fresh IDB read + detached Blob for upload body (never reuse a closed-tx handle).
+  const forUpload = await loadMediaForUpload(id);
+  if (!forUpload) {
+    throw new Error("Medium für Upload nicht in IndexedDB gefunden.");
+  }
+
   if (!uploadEnabled()) {
-    const skipped = await updateMediaUploadState(record.id, {
+    const skipped = await updateMediaUploadState(id, {
       uploadStatus: "uploaded",
       uploadError: "",
     });
-    return skipped ?? { ...record, uploadStatus: "uploaded", uploadError: "" };
+    return skipped ?? { ...forUpload, uploadStatus: "uploaded", uploadError: "" };
   }
 
-  await updateMediaUploadState(record.id, {
+  await updateMediaUploadState(id, {
     uploadStatus: "uploading",
     uploadError: "",
   });
 
+  // Re-load after status write so the fetch body is a freshly detached Blob.
+  const uploadBody = (await loadMediaForUpload(id)) ?? forUpload;
+
   try {
-    const result = await mediaUploadAdapter.upload(record);
-    const updated = await updateMediaUploadState(record.id, {
+    const result = await mediaUploadAdapter.upload(uploadBody);
+    const updated = await updateMediaUploadState(id, {
       uploadStatus: "uploaded",
       uploadError: "",
       remotePath: result.remotePath,
     });
     return (
       updated ?? {
-        ...record,
+        ...uploadBody,
         uploadStatus: "uploaded",
         uploadError: "",
         remotePath: result.remotePath,
@@ -76,13 +88,13 @@ export async function uploadMediaRecord(record: MediaRecord): Promise<MediaRecor
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "NAS-Upload fehlgeschlagen.";
-    const failed = await updateMediaUploadState(record.id, {
+    const failed = await updateMediaUploadState(id, {
       uploadStatus: "failed",
       uploadError: message,
     });
     const next =
       failed ?? {
-        ...record,
+        ...uploadBody,
         uploadStatus: "failed" as const,
         uploadError: message,
       };
@@ -131,7 +143,8 @@ export async function captureAndStoreMedia(input: CaptureMediaInput): Promise<Ca
   }
 
   try {
-    const uploaded = await uploadMediaRecord(saved);
+    // Pass id only — upload path always opens a fresh IDB read.
+    const uploaded = await uploadMediaRecord(saved.id);
     return { record: uploaded, uploadOk: true };
   } catch (error) {
     const message =
@@ -152,5 +165,5 @@ export async function captureAndStoreMedia(input: CaptureMediaInput): Promise<Ca
 
 /** Alias kept for callers that only need the upload step. */
 export async function syncMediaRecord(record: MediaRecord): Promise<MediaRecord> {
-  return uploadMediaRecord(record);
+  return uploadMediaRecord(record.id);
 }

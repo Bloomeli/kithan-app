@@ -63,22 +63,31 @@ function sanitizeFileToken(value: string, fallback: string): string {
   return cleaned.slice(0, 80) || fallback;
 }
 
-function readRawBody(req: VercelRequest): Promise<Buffer> {
+function readRawBody(req: VercelRequest): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
+    const chunks: Uint8Array[] = [];
     let total = 0;
 
     req.on("data", (chunk: Buffer | string) => {
-      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      total += buf.length;
+      const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+      const view = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+      total += view.byteLength;
       if (total > MAX_BYTES) {
         reject(Object.assign(new Error("Datei zu groß für den Upload-Proxy (max. ca. 4,5 MB)."), { statusCode: 413 }));
         req.destroy();
         return;
       }
-      chunks.push(buf);
+      chunks.push(view);
     });
-    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("end", () => {
+      const merged = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        merged.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      resolve(merged);
+    });
     req.on("error", (error) => reject(error));
   });
 }
@@ -144,7 +153,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     }
 
     const body = await readRawBody(req);
-    if (body.length === 0) {
+    if (body.byteLength === 0) {
       res.status(400).json({ ok: false, error: "Leerer Upload-Body." });
       return;
     }
@@ -158,14 +167,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
 
     await ensureFolder(folderUrl, auth);
 
+    const putBody = new ArrayBuffer(body.byteLength);
+    new Uint8Array(putBody).set(body);
+
     const putResponse = await fetch(fileUrl, {
       method: "PUT",
       headers: {
         Authorization: auth,
         "Content-Type": mimeType,
-        "Content-Length": String(body.length),
+        "Content-Length": String(putBody.byteLength),
       },
-      body,
+      body: putBody,
     });
 
     if (!putResponse.ok && putResponse.status !== 201 && putResponse.status !== 204) {
@@ -181,7 +193,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     res.status(200).json({
       ok: true,
       remotePath,
-      bytes: body.length,
+      bytes: body.byteLength,
     });
   } catch (error) {
     const statusCode =
