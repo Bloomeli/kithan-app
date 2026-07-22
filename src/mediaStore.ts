@@ -599,6 +599,26 @@ export async function getMediaForOwner(sessionKey: string, ownerKey: string): Pr
   }
 }
 
+export async function getMediaForSession(sessionKey: string): Promise<MediaRecord[]> {
+  await ensureMediaDbReady();
+  const db = await openDb();
+  try {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const index = tx.objectStore(STORE_NAME).index("bySession");
+    const request = index.getAll(sessionKey);
+    const [rows] = await Promise.all([
+      requestToPromise(request as IDBRequest<StoredMediaRecord[]>),
+      transactionDone(tx),
+    ]);
+    return rows
+      .filter((row) => !String(row.id).startsWith(SELFTEST_ID_PREFIX))
+      .map((row) => storedToMediaRecord(row))
+      .sort((a, b) => a.createdAt - b.createdAt);
+  } finally {
+    db.close();
+  }
+}
+
 export async function deleteMedia(id: string): Promise<void> {
   await ensureMediaDbReady();
   const db = await openDb();

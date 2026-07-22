@@ -14,6 +14,9 @@ import {
   type SchluesselPdfEntry,
   type SchluesselPdfInput,
 } from "./generateProtocolPdf";
+import { EMAIL_SENDERS } from "./emailConfig";
+import { sendProtocolEmail } from "./sendProtocolEmail";
+import { uploadProtocolArchive } from "./protocolArchiveUpload";
 
 type Objektart = "schluessel" | "gewerbe" | "privat" | "garage";
 type Protokollart = "uebergabe" | "ruecknahme";
@@ -851,6 +854,11 @@ let vermieterDruckbuchstaben = "";
 let mieterDruckbuchstaben = "";
 let zeugeName = "";
 let zeugeAnschrift = "";
+/** Optional Mieter email send (after „abschließen“). */
+let protocolEmailTo = "";
+let protocolEmailSenderId = "";
+/** Mieter-PDF kept for the post-completion email step. */
+let completionMieterPdf: { filename: string; base64: string } | null = null;
 
 const MAX_SCHLUESSEL_ENTRIES = 2;
 let weitereRaumState: WeitereRaumEntry[] = [];
@@ -2153,6 +2161,9 @@ function resetSignatureUiState(): void {
   mieterDruckbuchstaben = "";
   zeugeName = "";
   zeugeAnschrift = "";
+  protocolEmailTo = "";
+  protocolEmailSenderId = "";
+  completionMieterPdf = null;
   signatureContainer.innerHTML = "";
   schluesselSignatureContainer.innerHTML = "";
 }
@@ -2421,23 +2432,225 @@ function buildSchluesselPdfInput(protokollart: Protokollart, form: FormDraft): S
   };
 }
 
-function clearCurrentSessionDraft(): void {
-  const context = getCurrentFormContext();
-  if (!context) {
-    return;
-  }
-  const sessionKey = formDraftKey(context.objektart, context.protokollart);
-  localStorage.removeItem(sessionKey);
-  void deleteMediaForSession(sessionKey).catch((error) => console.error(error));
+function buildCompletionDraftName(form: FormDraft, protokollart: Protokollart): string {
+  const mieter = form.kopfdaten.mietername.trim();
+  const adresse = getGebaeudeLabel(form.kopfdaten.gebaeudeAuswahl).trim();
+  const kind = PROTOKOLLART_LABELS[protokollart];
+  const parts = [mieter, adresse, kind].filter(Boolean);
+  return parts.length > 0 ? parts.join(" – ") : `Protokoll ${kind}`;
 }
 
-function finishProtocolAsPdf(): void {
+/**
+ * Ensure the completed protocol stays in „Meine Entwürfe“ for resend/reupload.
+ * Does not remove session data or media.
+ */
+function upsertCompletionNamedDraft(
+  context: { objektart: Objektart; protokollart: Protokollart },
+  form: FormDraft
+): void {
+  const drafts = loadNamedDrafts();
+  const name = buildCompletionDraftName(form, context.protokollart);
+  const now = new Date().toISOString();
+  const formCopy = JSON.parse(JSON.stringify(form)) as FormDraft;
+
+  const existingIndex = drafts.findIndex(
+    (item) =>
+      item.objektart === context.objektart &&
+      item.protokollart === context.protokollart &&
+      item.name === name
+  );
+
+  if (existingIndex >= 0) {
+    drafts[existingIndex] = {
+      ...drafts[existingIndex],
+      name,
+      updatedAt: now,
+      form: formCopy,
+    };
+  } else {
+    drafts.unshift({
+      id: generateId("named-draft"),
+      name,
+      createdAt: now,
+      updatedAt: now,
+      objektart: context.objektart,
+      protokollart: context.protokollart,
+      form: formCopy,
+    });
+  }
+
+  saveNamedDrafts(drafts.slice(0, MAX_NAMED_DRAFTS));
+}
+
+function renderCompletionPanel(
+  container: HTMLDivElement,
+  archiveMessage: string,
+  archiveOk: boolean,
+  mieterPdfOk: boolean
+): void {
+  const existing = container.querySelector(".protocol-completion-panel");
+  existing?.remove();
+
+  const panel = document.createElement("div");
+  panel.className = "protocol-completion-panel";
+
+  const heading = document.createElement("h3");
+  heading.className = "section-title";
+  heading.textContent = "Abschluss";
+  panel.appendChild(heading);
+
+  const statusList = document.createElement("div");
+  statusList.className = "protocol-completion-status";
+
+  const archiveStatus = document.createElement("p");
+  archiveStatus.className = archiveOk
+    ? "protocol-completion-line is-ok"
+    : "protocol-completion-line is-warn";
+  archiveStatus.textContent = `Server-Upload: ${archiveMessage}`;
+  statusList.appendChild(archiveStatus);
+
+  const pdfStatus = document.createElement("p");
+  pdfStatus.className = mieterPdfOk
+    ? "protocol-completion-line is-ok"
+    : "protocol-completion-line is-error";
+  pdfStatus.textContent = mieterPdfOk
+    ? "Mieter-PDF: erzeugt (ohne Fotos/Videos) und bereit zum Senden."
+    : "Mieter-PDF: konnte nicht erzeugt werden.";
+  statusList.appendChild(pdfStatus);
+
+  const keepNote = document.createElement("p");
+  keepNote.className = "protocol-completion-line";
+  keepNote.textContent =
+    "Protokoll bleibt unter „Meine Entwürfe“ und lokal gespeichert — unabhängig vom Server-Upload.";
+  statusList.appendChild(keepNote);
+
+  panel.appendChild(statusList);
+
+  const emailBlock = document.createElement("div");
+  emailBlock.className = "protocol-email-block";
+
+  const emailHeading = document.createElement("h3");
+  emailHeading.className = "section-title";
+  emailHeading.textContent = "Mieter-PDF per E-Mail";
+  emailBlock.appendChild(emailHeading);
+
+  const senderGroup = document.createElement("div");
+  senderGroup.className = "input-group";
+  const senderLabel = document.createElement("label");
+  senderLabel.htmlFor = "completion-email-sender";
+  senderLabel.textContent = "Absender:";
+  const senderSelect = document.createElement("select");
+  senderSelect.id = "completion-email-sender";
+
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.disabled = true;
+  placeholder.selected = true;
+  placeholder.textContent = "Bitte Absender wählen...";
+  senderSelect.appendChild(placeholder);
+
+  EMAIL_SENDERS.forEach((sender) => {
+    const option = document.createElement("option");
+    option.value = sender.id;
+    option.textContent = sender.label;
+    senderSelect.appendChild(option);
+  });
+
+  senderSelect.addEventListener("change", () => {
+    protocolEmailSenderId = senderSelect.value;
+  });
+  senderGroup.append(senderLabel, senderSelect);
+  emailBlock.appendChild(senderGroup);
+
+  emailBlock.appendChild(
+    createTextField(
+      "completion-email-to",
+      "E-Mail des Mieters:",
+      protocolEmailTo,
+      "text",
+      (value) => {
+        protocolEmailTo = value;
+      },
+      "z.B. mieter@example.com"
+    )
+  );
+
+  const emailStatus = document.createElement("p");
+  emailStatus.className = "protocol-email-status hidden";
+  emailStatus.setAttribute("role", "status");
+  emailBlock.appendChild(emailStatus);
+
+  const sendButton = document.createElement("button");
+  sendButton.type = "button";
+  sendButton.className = "main-btn btn-send-mieter-pdf";
+  sendButton.textContent = "Mieter-PDF senden";
+  sendButton.disabled = !mieterPdfOk || !completionMieterPdf;
+  sendButton.addEventListener("click", () => {
+    void (async () => {
+      emailStatus.classList.add("hidden");
+      emailStatus.classList.remove("is-error", "is-ok");
+
+      if (!completionMieterPdf) {
+        emailStatus.textContent = "Kein Mieter-PDF vorhanden.";
+        emailStatus.classList.add("is-error");
+        emailStatus.classList.remove("hidden");
+        return;
+      }
+      const senderId = protocolEmailSenderId.trim();
+      const to = protocolEmailTo.trim();
+      if (!senderId) {
+        emailStatus.textContent = "Bitte Absender wählen.";
+        emailStatus.classList.add("is-error");
+        emailStatus.classList.remove("hidden");
+        return;
+      }
+      if (!to) {
+        emailStatus.textContent = "Bitte Empfänger-E-Mail eingeben.";
+        emailStatus.classList.add("is-error");
+        emailStatus.classList.remove("hidden");
+        return;
+      }
+
+      sendButton.disabled = true;
+      emailStatus.textContent = "E-Mail wird gesendet…";
+      emailStatus.classList.remove("hidden");
+
+      const result = await sendProtocolEmail({
+        senderId,
+        to,
+        filename: completionMieterPdf.filename,
+        pdfBase64: completionMieterPdf.base64,
+      });
+
+      sendButton.disabled = false;
+      if (!result.ok) {
+        emailStatus.textContent = `E-Mail fehlgeschlagen: ${result.error ?? "Unbekannter Fehler."}`;
+        emailStatus.classList.add("is-error");
+        return;
+      }
+      emailStatus.textContent = "Mieter-PDF per E-Mail gesendet.";
+      emailStatus.classList.add("is-ok");
+    })();
+  });
+  emailBlock.appendChild(sendButton);
+
+  const hint = document.createElement("p");
+  hint.className = "protocol-email-hint";
+  hint.textContent =
+    "E-Mail-Versand ist unabhängig vom Server-Upload und jederzeit erneut möglich.";
+  emailBlock.appendChild(hint);
+
+  panel.appendChild(emailBlock);
+  container.appendChild(panel);
+}
+
+async function finishProtocolAsPdf(): Promise<void> {
   const context = getCurrentFormContext();
   if (
     !context ||
     (context.objektart !== "gewerbe" && context.objektart !== "privat" && context.objektart !== "garage")
   ) {
-    showDraftStatus("PDF-Export ist nur für Gewerbe/Privat/Garage verfügbar.", true);
+    showDraftStatus("Abschluss ist nur für Gewerbe/Privat/Garage verfügbar.", true);
     return;
   }
 
@@ -2447,25 +2660,69 @@ function finishProtocolAsPdf(): void {
     return;
   }
 
-  try {
-    generateAndDownloadProtocolPdf(buildProtocolPdfInput(context.objektart, context.protokollart, form));
-  } catch (error) {
-    console.error(error);
-    showDraftStatus("PDF konnte nicht erzeugt werden.", true);
-    return;
+  // Keep / refresh entry in „Meine Entwürfe“ — do not clear on abschließen.
+  upsertCompletionNamedDraft(context, form);
+  syncCurrentFormToSessionDraft();
+
+  const finishButton = signatureContainer.querySelector(
+    ".btn-finish-pdf"
+  ) as HTMLButtonElement | null;
+  if (finishButton) {
+    finishButton.disabled = true;
   }
 
-  clearCurrentSessionDraft();
-  clearKopfdatenFields();
-  resetSignatureUiState();
-  roomsContainer.innerHTML = "";
-  metersContainer.innerHTML = "";
-  closingContainer.innerHTML = "";
-  localStorage.removeItem(STORAGE_KEYS.objektart);
-  localStorage.removeItem(STORAGE_KEYS.protokollart);
-  setAppSubtitle(DEFAULT_SUBTITLE, false);
-  setAppTitleVisible(true);
-  showOnly(viewObjektart);
+  showDraftStatus("Abschluss läuft: Mieter-PDF und Server-Upload…");
+
+  let mieterPdfOk = false;
+  try {
+    completionMieterPdf = generateAndDownloadProtocolPdf(
+      buildProtocolPdfInput(context.objektart, context.protokollart, form)
+    );
+    mieterPdfOk = true;
+  } catch (error) {
+    console.error(error);
+    completionMieterPdf = null;
+    mieterPdfOk = false;
+  }
+
+  const sessionKey = formDraftKey(context.objektart, context.protokollart);
+  let archiveOk = false;
+  let archiveMessage = "Server-Upload nicht ausgeführt.";
+  try {
+    const archive = await uploadProtocolArchive({
+      sessionKey,
+      pdfFilename: completionMieterPdf?.filename ?? "Protokoll.pdf",
+      pdfBase64: completionMieterPdf?.base64 ?? "",
+    });
+    archiveOk = archive.ok;
+    archiveMessage = archive.message;
+  } catch (error) {
+    console.error(error);
+    archiveOk = false;
+    archiveMessage =
+      error instanceof Error
+        ? error.message
+        : "Server-Upload fehlgeschlagen — lokale Daten bleiben erhalten.";
+  }
+
+  const statusParts = [
+    mieterPdfOk ? "Mieter-PDF bereit." : "Mieter-PDF fehlgeschlagen.",
+    archiveMessage,
+    "Eintrag bleibt unter „Meine Entwürfe“.",
+  ];
+  showDraftStatus(statusParts.join(" "), !mieterPdfOk && !archiveOk);
+
+  renderCompletionPanel(signatureContainer, archiveMessage, archiveOk, mieterPdfOk);
+}
+
+function clearCurrentSessionDraft(): void {
+  const context = getCurrentFormContext();
+  if (!context) {
+    return;
+  }
+  const sessionKey = formDraftKey(context.objektart, context.protokollart);
+  localStorage.removeItem(sessionKey);
+  void deleteMediaForSession(sessionKey).catch((error) => console.error(error));
 }
 
 function finishSchluesselAsPdf(): void {
@@ -2496,7 +2753,12 @@ function finishSchluesselAsPdf(): void {
   showOnly(viewObjektart);
 }
 
-function renderSignatureSection(container: HTMLDivElement, idPrefix: string, onFinish: () => void): void {
+function renderSignatureSection(
+  container: HTMLDivElement,
+  idPrefix: string,
+  onFinish: () => void | Promise<void>,
+  options?: { finishLabel?: string }
+): void {
   resetSignatureUiState();
 
   const heading = document.createElement("h3");
@@ -2607,8 +2869,10 @@ function renderSignatureSection(container: HTMLDivElement, idPrefix: string, onF
   const finishButton = document.createElement("button");
   finishButton.type = "button";
   finishButton.className = "main-btn btn-finish-pdf";
-  finishButton.textContent = "Fertigstellen und als PDF speichern";
-  finishButton.addEventListener("click", onFinish);
+  finishButton.textContent = options?.finishLabel ?? "Fertigstellen und als PDF speichern";
+  finishButton.addEventListener("click", () => {
+    void Promise.resolve(onFinish());
+  });
   container.appendChild(finishButton);
 }
 
@@ -2914,7 +3178,10 @@ function showFormular(objektart: Objektart, protokollart: Protokollart): void {
   renderRooms(objektart);
   renderMeterSections(objektart);
   renderClosingSection(objektart, protokollart);
-  renderSignatureSection(signatureContainer, "standard", finishProtocolAsPdf);
+  renderSignatureSection(signatureContainer, "standard", finishProtocolAsPdf, {
+    finishLabel:
+      protokollart === "uebergabe" ? "Übergabe abschließen" : "Rücknahme abschließen",
+  });
   showOnly(viewFormular);
 }
 

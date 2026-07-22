@@ -5,6 +5,9 @@
   "functions": {
     "api/nas-upload.ts": {
       "maxDuration": 60
+    },
+    "api/send-protocol-email.ts": {
+      "maxDuration": 60
     }
   }
 }

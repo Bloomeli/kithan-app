@@ -225,7 +225,13 @@ function writeSignatureSection(
   writer.addSignatureBody(data.zeugeSignaturePng);
 }
 
-export function generateAndDownloadProtocolPdf(input: ProtocolPdfInput): void {
+export interface ProtocolPdfBytes {
+  filename: string;
+  /** Raw base64 PDF payload (no data: prefix). */
+  base64: string;
+}
+
+export function generateAndDownloadProtocolPdf(input: ProtocolPdfInput): ProtocolPdfBytes {
   const writer = new PdfWriter();
 
   writer.addTitle(`Protokoll ${input.protokollartLabel} – ${input.objektartLabel}`);
@@ -293,7 +299,13 @@ export function generateAndDownloadProtocolPdf(input: ProtocolPdfInput): void {
 
   writeSignatureSection(writer, input);
 
-  writer.getDocument().save(buildFilename(input));
+  const filename = buildFilename(input);
+  const doc = writer.getDocument();
+  const dataUri = doc.output("datauristring") as string;
+  const comma = dataUri.indexOf(",");
+  const base64 = comma >= 0 ? dataUri.slice(comma + 1) : dataUri;
+  doc.save(filename);
+  return { filename, base64 };
 }
 
 export function generateAndDownloadSchluesselPdf(input: SchluesselPdfInput): void {

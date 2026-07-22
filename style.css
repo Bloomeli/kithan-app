@@ -807,6 +807,63 @@ body {
     margin-top: 0;
 }
 
+.protocol-email-block {
+    margin-top: 28px;
+    margin-bottom: 8px;
+    text-align: left;
+}
+
+.protocol-email-hint {
+    margin: 0 0 12px;
+    color: #a0a0a0;
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+.protocol-completion-panel {
+    margin-top: 28px;
+    text-align: left;
+}
+
+.protocol-completion-status {
+    margin-bottom: 16px;
+}
+
+.protocol-completion-line {
+    margin: 0 0 8px;
+    font-size: 0.9rem;
+    line-height: 1.4;
+    color: var(--text-color);
+}
+
+.protocol-completion-line.is-ok,
+.protocol-email-status.is-ok {
+    color: var(--neon-green);
+}
+
+.protocol-completion-line.is-warn {
+    color: #f0c040;
+}
+
+.protocol-completion-line.is-error,
+.protocol-email-status.is-error {
+    color: var(--neon-purple);
+}
+
+.protocol-email-status {
+    margin: 8px 0 12px;
+    font-size: 0.9rem;
+    line-height: 1.4;
+    white-space: pre-wrap;
+}
+
+.btn-send-mieter-pdf {
+    border-color: var(--neon-green);
+    color: var(--neon-green);
+    margin-top: 8px;
+    margin-bottom: 8px;
+}
+
 .btn-finish-pdf {
     border-color: var(--neon-green);
     color: var(--neon-green);
