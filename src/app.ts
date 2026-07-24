@@ -2486,6 +2486,24 @@ function completionKindLabel(protokollart: Protokollart): string {
   return protokollart === "uebergabe" ? "Übergabe" : "Rücknahme";
 }
 
+/** After abschließen: hide Kopfdaten/Räume/Unterschrift; keep only completion UI + footer buttons. */
+function setProtocolFormBodyHidden(hidden: boolean): void {
+  Array.from(formStandard.children).forEach((child) => {
+    if (!(child instanceof HTMLElement)) {
+      return;
+    }
+    if (child.id === "protocol-completion-top") {
+      child.classList.remove("hidden");
+      return;
+    }
+    child.classList.toggle("hidden", hidden);
+  });
+  // Status sits in the completion banner — do not also show draft-status above the buttons.
+  if (hidden) {
+    hideDraftStatus();
+  }
+}
+
 function renderMieterEmailSection(parent: HTMLElement, mieterPdfOk: boolean): void {
   const emailBlock = document.createElement("div");
   emailBlock.className = "protocol-email-block";
@@ -2636,6 +2654,7 @@ function renderCompletionTop(
   top.appendChild(banner);
 
   renderMieterEmailSection(top, mieterPdfOk);
+  setProtocolFormBodyHidden(true);
   top.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -2679,6 +2698,8 @@ async function finishProtocolAsPdf(): Promise<void> {
   waiting.className = "protocol-completion-banner";
   waiting.textContent = `${kind} wird abgeschlossen… PDF, Fotos und Videos werden übertragen. Bitte warten.`;
   top.appendChild(waiting);
+  // Hide the filled-in form immediately — only waiting banner (+ later email) stays.
+  setProtocolFormBodyHidden(true);
   top.scrollIntoView({ behavior: "smooth", block: "start" });
 
   let mieterPdfOk = false;
@@ -2709,18 +2730,8 @@ async function finishProtocolAsPdf(): Promise<void> {
     }
   }
 
-  // Only after all transfers finished: final message + email section.
+  // Only after all transfers finished: final message + email section (no form body).
   renderCompletionTop(context.protokollart, archiveOk, mieterPdfOk);
-  if (archiveOk && mieterPdfOk) {
-    showDraftStatus(
-      `✅ ${kind} erfolgreich abgeschlossen. PDF, Fotos und Videos wurden erfolgreich auf den Firmenserver übertragen.`
-    );
-  } else {
-    showDraftStatus(
-      "⚠ Server momentan nicht erreichbar. Das Protokoll wurde lokal gespeichert und kann später erneut übertragen werden.",
-      true
-    );
-  }
 }
 
 function clearCurrentSessionDraft(): void {
@@ -3182,6 +3193,7 @@ function showFormular(objektart: Objektart, protokollart: Protokollart): void {
   formSchluessel.classList.add("hidden");
   formStandard.classList.remove("hidden");
   document.getElementById("protocol-completion-top")?.remove();
+  setProtocolFormBodyHidden(false);
   applyFormLabels(objektart, protokollart);
   restoreKopfdaten(draft);
   renderRooms(objektart);
