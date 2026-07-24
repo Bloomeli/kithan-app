@@ -34,6 +34,9 @@ function joinWebDavUrl(base: string, ...segments: string[]): string {
 
 function extensionFor(mimeType: string, kind: string): string {
   const mime = mimeType.toLowerCase();
+  if (mime.includes("pdf")) {
+    return ".pdf";
+  }
   if (mime.includes("jpeg") || mime.includes("jpg")) {
     return ".jpg";
   }
@@ -54,6 +57,9 @@ function extensionFor(mimeType: string, kind: string): string {
   }
   if (mime.includes("webm")) {
     return ".webm";
+  }
+  if (kind === "pdf" || kind === "document") {
+    return ".pdf";
   }
   return kind === "video" ? ".mp4" : ".jpg";
 }
@@ -140,15 +146,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     const nasPassword = getEnv("NAS_WEBDAV_PASSWORD");
     const auth = basicAuthHeader(nasUser, nasPassword);
 
-    const mediaId = sanitizeFileToken(String(req.headers["x-kithan-media-id"] ?? ""), "media");
+    const mediaId = sanitizeFileToken(String(req.headers["x-kithan-media-id"] ?? ""), "file");
     const kindRaw = String(req.headers["x-kithan-kind"] ?? "photo").toLowerCase();
-    const kind = kindRaw === "video" ? "video" : "photo";
+    const kind =
+      kindRaw === "video" ? "video" : kindRaw === "pdf" || kindRaw === "document" ? "pdf" : "photo";
     const ownerKey = sanitizeFileToken(String(req.headers["x-kithan-owner"] ?? ""), "owner");
+    const requestedName = sanitizeFileToken(
+      String(req.headers["x-kithan-filename"] ?? ""),
+      ""
+    );
     const mimeType = String(req.headers["content-type"] ?? "").split(";")[0].trim() ||
-      (kind === "video" ? "video/mp4" : "image/jpeg");
+      (kind === "video" ? "video/mp4" : kind === "pdf" ? "application/pdf" : "image/jpeg");
 
-    if (!mimeType.startsWith("image/") && !mimeType.startsWith("video/")) {
-      res.status(400).json({ ok: false, error: "Nur Bild- oder Videodateien sind erlaubt." });
+    const allowed =
+      mimeType.startsWith("image/") ||
+      mimeType.startsWith("video/") ||
+      mimeType === "application/pdf";
+    if (!allowed) {
+      res.status(400).json({ ok: false, error: "Nur Bild-, Video- oder PDF-Dateien sind erlaubt." });
       return;
     }
 
@@ -160,7 +175,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
 
     const ext = extensionFor(mimeType, kind);
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const fileName = `${kind}-${ownerKey}-${mediaId}-${stamp}${ext}`;
+    const fileName = requestedName
+      ? requestedName.toLowerCase().endsWith(".pdf")
+        ? requestedName
+        : `${requestedName}${ext}`
+      : `${kind}-${ownerKey}-${mediaId}-${stamp}${ext}`;
     const folderUrl = joinWebDavUrl(nasUrl, TARGET_FOLDER);
     const fileUrl = joinWebDavUrl(nasUrl, TARGET_FOLDER, fileName);
     const remotePath = `${TARGET_FOLDER}/${fileName}`;

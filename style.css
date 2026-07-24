@@ -619,7 +619,8 @@ body {
 
 /* Native Select: eigener Pfeil etwas einwärts, damit er gut tippbar bleibt. */
 #gebaeude-auswahl,
-#vermieter-auswahl {
+#vermieter-auswahl,
+#completion-email-sender {
     appearance: none;
     -webkit-appearance: none;
     -moz-appearance: none;
@@ -820,32 +821,31 @@ body {
     line-height: 1.4;
 }
 
-.protocol-completion-panel {
-    margin-top: 28px;
+#protocol-completion-top {
+    margin: 0 0 24px;
     text-align: left;
 }
 
-.protocol-completion-status {
-    margin-bottom: 16px;
+.protocol-completion-banner {
+    margin: 0 0 20px;
+    padding: 14px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--neon-green);
+    color: var(--neon-green);
+    font-size: 1rem;
+    line-height: 1.45;
+    white-space: pre-wrap;
 }
 
-.protocol-completion-line {
-    margin: 0 0 8px;
-    font-size: 0.9rem;
-    line-height: 1.4;
-    color: var(--text-color);
+.protocol-completion-banner.is-error {
+    border-color: var(--neon-purple);
+    color: var(--neon-purple);
 }
 
-.protocol-completion-line.is-ok,
 .protocol-email-status.is-ok {
     color: var(--neon-green);
 }
 
-.protocol-completion-line.is-warn {
-    color: #f0c040;
-}
-
-.protocol-completion-line.is-error,
 .protocol-email-status.is-error {
     color: var(--neon-purple);
 }

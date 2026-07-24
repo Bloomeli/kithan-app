@@ -2482,56 +2482,17 @@ function upsertCompletionNamedDraft(
   saveNamedDrafts(drafts.slice(0, MAX_NAMED_DRAFTS));
 }
 
-function renderCompletionPanel(
-  container: HTMLDivElement,
-  archiveMessage: string,
-  archiveOk: boolean,
-  mieterPdfOk: boolean
-): void {
-  const existing = container.querySelector(".protocol-completion-panel");
-  existing?.remove();
+function completionKindLabel(protokollart: Protokollart): string {
+  return protokollart === "uebergabe" ? "Übergabe" : "Rücknahme";
+}
 
-  const panel = document.createElement("div");
-  panel.className = "protocol-completion-panel";
-
-  const heading = document.createElement("h3");
-  heading.className = "section-title";
-  heading.textContent = "Abschluss";
-  panel.appendChild(heading);
-
-  const statusList = document.createElement("div");
-  statusList.className = "protocol-completion-status";
-
-  const archiveStatus = document.createElement("p");
-  archiveStatus.className = archiveOk
-    ? "protocol-completion-line is-ok"
-    : "protocol-completion-line is-warn";
-  archiveStatus.textContent = `Server-Upload: ${archiveMessage}`;
-  statusList.appendChild(archiveStatus);
-
-  const pdfStatus = document.createElement("p");
-  pdfStatus.className = mieterPdfOk
-    ? "protocol-completion-line is-ok"
-    : "protocol-completion-line is-error";
-  pdfStatus.textContent = mieterPdfOk
-    ? "Mieter-PDF: erzeugt (ohne Fotos/Videos) und bereit zum Senden."
-    : "Mieter-PDF: konnte nicht erzeugt werden.";
-  statusList.appendChild(pdfStatus);
-
-  const keepNote = document.createElement("p");
-  keepNote.className = "protocol-completion-line";
-  keepNote.textContent =
-    "Protokoll bleibt unter „Meine Entwürfe“ und lokal gespeichert — unabhängig vom Server-Upload.";
-  statusList.appendChild(keepNote);
-
-  panel.appendChild(statusList);
-
+function renderMieterEmailSection(parent: HTMLElement, mieterPdfOk: boolean): void {
   const emailBlock = document.createElement("div");
   emailBlock.className = "protocol-email-block";
 
   const emailHeading = document.createElement("h3");
   emailHeading.className = "section-title";
-  emailHeading.textContent = "Mieter-PDF per E-Mail";
+  emailHeading.textContent = "📧 Mieter-PDF per E-Mail";
   emailBlock.appendChild(emailHeading);
 
   const senderGroup = document.createElement("div");
@@ -2591,7 +2552,7 @@ function renderCompletionPanel(
       emailStatus.classList.remove("is-error", "is-ok");
 
       if (!completionMieterPdf) {
-        emailStatus.textContent = "Kein Mieter-PDF vorhanden.";
+        emailStatus.textContent = "Das PDF konnte nicht erstellt werden.";
         emailStatus.classList.add("is-error");
         emailStatus.classList.remove("hidden");
         return;
@@ -2605,7 +2566,7 @@ function renderCompletionPanel(
         return;
       }
       if (!to) {
-        emailStatus.textContent = "Bitte Empfänger-E-Mail eingeben.";
+        emailStatus.textContent = "Bitte E-Mail-Adresse des Mieters eingeben.";
         emailStatus.classList.add("is-error");
         emailStatus.classList.remove("hidden");
         return;
@@ -2624,11 +2585,13 @@ function renderCompletionPanel(
 
       sendButton.disabled = false;
       if (!result.ok) {
-        emailStatus.textContent = `E-Mail fehlgeschlagen: ${result.error ?? "Unbekannter Fehler."}`;
+        emailStatus.textContent =
+          result.error?.trim() ||
+          "E-Mail konnte nicht gesendet werden. Bitte später erneut versuchen.";
         emailStatus.classList.add("is-error");
         return;
       }
-      emailStatus.textContent = "Mieter-PDF per E-Mail gesendet.";
+      emailStatus.textContent = "Mieter-PDF wurde per E-Mail gesendet.";
       emailStatus.classList.add("is-ok");
     })();
   });
@@ -2636,12 +2599,44 @@ function renderCompletionPanel(
 
   const hint = document.createElement("p");
   hint.className = "protocol-email-hint";
-  hint.textContent =
-    "E-Mail-Versand ist unabhängig vom Server-Upload und jederzeit erneut möglich.";
+  hint.textContent = "Es wird nur das PDF versendet — keine Fotos oder Videos.";
   emailBlock.appendChild(hint);
 
-  panel.appendChild(emailBlock);
-  container.appendChild(panel);
+  parent.appendChild(emailBlock);
+}
+
+/**
+ * Banner + E-Mail-Bereich ganz oben im Formular (nach Abschluss aller Übertragungen).
+ */
+function renderCompletionTop(
+  protokollart: Protokollart,
+  archiveOk: boolean,
+  mieterPdfOk: boolean
+): void {
+  let top = document.getElementById("protocol-completion-top");
+  if (!top) {
+    top = document.createElement("div");
+    top.id = "protocol-completion-top";
+    formStandard.insertBefore(top, formStandard.firstChild);
+  }
+  top.innerHTML = "";
+
+  const kind = completionKindLabel(protokollart);
+  const banner = document.createElement("p");
+  banner.className = "protocol-completion-banner";
+  banner.setAttribute("role", "status");
+
+  if (archiveOk && mieterPdfOk) {
+    banner.textContent = `✅ ${kind} erfolgreich abgeschlossen. PDF, Fotos und Videos wurden erfolgreich auf den Firmenserver übertragen.`;
+  } else {
+    banner.classList.add("is-error");
+    banner.textContent =
+      "⚠ Server momentan nicht erreichbar. Das Protokoll wurde lokal gespeichert und kann später erneut übertragen werden.";
+  }
+  top.appendChild(banner);
+
+  renderMieterEmailSection(top, mieterPdfOk);
+  top.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 async function finishProtocolAsPdf(): Promise<void> {
@@ -2671,7 +2666,20 @@ async function finishProtocolAsPdf(): Promise<void> {
     finishButton.disabled = true;
   }
 
-  showDraftStatus("Abschluss läuft: Mieter-PDF und Server-Upload…");
+  const kind = completionKindLabel(context.protokollart);
+  hideDraftStatus();
+  let top = document.getElementById("protocol-completion-top");
+  if (!top) {
+    top = document.createElement("div");
+    top.id = "protocol-completion-top";
+    formStandard.insertBefore(top, formStandard.firstChild);
+  }
+  top.innerHTML = "";
+  const waiting = document.createElement("p");
+  waiting.className = "protocol-completion-banner";
+  waiting.textContent = `${kind} wird abgeschlossen… PDF, Fotos und Videos werden übertragen. Bitte warten.`;
+  top.appendChild(waiting);
+  top.scrollIntoView({ behavior: "smooth", block: "start" });
 
   let mieterPdfOk = false;
   try {
@@ -2687,32 +2695,32 @@ async function finishProtocolAsPdf(): Promise<void> {
 
   const sessionKey = formDraftKey(context.objektart, context.protokollart);
   let archiveOk = false;
-  let archiveMessage = "Server-Upload nicht ausgeführt.";
-  try {
-    const archive = await uploadProtocolArchive({
-      sessionKey,
-      pdfFilename: completionMieterPdf?.filename ?? "Protokoll.pdf",
-      pdfBase64: completionMieterPdf?.base64 ?? "",
-    });
-    archiveOk = archive.ok;
-    archiveMessage = archive.message;
-  } catch (error) {
-    console.error(error);
-    archiveOk = false;
-    archiveMessage =
-      error instanceof Error
-        ? error.message
-        : "Server-Upload fehlgeschlagen — lokale Daten bleiben erhalten.";
+  if (mieterPdfOk && completionMieterPdf) {
+    try {
+      const archive = await uploadProtocolArchive({
+        sessionKey,
+        pdfFilename: completionMieterPdf.filename,
+        pdfBase64: completionMieterPdf.base64,
+      });
+      archiveOk = archive.ok;
+    } catch (error) {
+      console.error(error);
+      archiveOk = false;
+    }
   }
 
-  const statusParts = [
-    mieterPdfOk ? "Mieter-PDF bereit." : "Mieter-PDF fehlgeschlagen.",
-    archiveMessage,
-    "Eintrag bleibt unter „Meine Entwürfe“.",
-  ];
-  showDraftStatus(statusParts.join(" "), !mieterPdfOk && !archiveOk);
-
-  renderCompletionPanel(signatureContainer, archiveMessage, archiveOk, mieterPdfOk);
+  // Only after all transfers finished: final message + email section.
+  renderCompletionTop(context.protokollart, archiveOk, mieterPdfOk);
+  if (archiveOk && mieterPdfOk) {
+    showDraftStatus(
+      `✅ ${kind} erfolgreich abgeschlossen. PDF, Fotos und Videos wurden erfolgreich auf den Firmenserver übertragen.`
+    );
+  } else {
+    showDraftStatus(
+      "⚠ Server momentan nicht erreichbar. Das Protokoll wurde lokal gespeichert und kann später erneut übertragen werden.",
+      true
+    );
+  }
 }
 
 function clearCurrentSessionDraft(): void {
@@ -3173,6 +3181,7 @@ function showFormular(objektart: Objektart, protokollart: Protokollart): void {
 
   formSchluessel.classList.add("hidden");
   formStandard.classList.remove("hidden");
+  document.getElementById("protocol-completion-top")?.remove();
   applyFormLabels(objektart, protokollart);
   restoreKopfdaten(draft);
   renderRooms(objektart);

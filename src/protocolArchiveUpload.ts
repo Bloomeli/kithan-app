@@ -1,9 +1,7 @@
 /**
- * Company server archive upload (PDF + session media).
- * Independent of Resend / Mieter-PDF email.
- *
- * FTPS batch for the PDF is not wired yet — media uses the existing
- * NAS/WebDAV upload adapter when configured. Failures never delete local data.
+ * Firmenserver-Übertragung: Fotos, Videos und Protokoll-PDF.
+ * Unabhängig vom Mieter-E-Mail-Versand (Resend).
+ * Bei Fehlern bleiben lokale Daten erhalten.
  */
 
 import { getMediaForSession } from "./mediaStore";
@@ -18,87 +16,98 @@ export interface ProtocolArchiveUploadInput {
 
 export interface ProtocolArchiveUploadResult {
   ok: boolean;
-  /** Short status for the completion UI. */
-  message: string;
-  mediaUploaded: number;
-  mediaFailed: number;
-  mediaTotal: number;
+  photoUploaded: number;
+  photoFailed: number;
+  videoUploaded: number;
+  videoFailed: number;
   pdfUploaded: boolean;
 }
 
+function remoteConfigured(): boolean {
+  return MEDIA_CONFIG.uploadTarget.kind !== "local-only" && Boolean(MEDIA_CONFIG.uploadTarget.endpoint);
+}
+
+async function uploadPdfToServer(filename: string, pdfBase64: string): Promise<boolean> {
+  const endpoint = MEDIA_CONFIG.uploadTarget.endpoint?.trim();
+  if (!endpoint || !pdfBase64) {
+    return false;
+  }
+
+  const binary = Uint8Array.from(atob(pdfBase64), (c) => c.charCodeAt(0));
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/pdf",
+      "X-Kithan-Media-Id": `pdf-${Date.now()}`,
+      "X-Kithan-Kind": "pdf",
+      "X-Kithan-Owner": "protokoll",
+      "X-Kithan-Filename": filename.replace(/[^\w.\-äöüÄÖÜß]+/g, "_").slice(0, 120),
+    },
+    body: binary,
+  });
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(payload.error?.trim() || `PDF-Übertragung fehlgeschlagen (HTTP ${response.status}).`);
+  }
+  return true;
+}
+
 /**
- * Attempt to push protocol assets to the company server.
- * Local IndexedDB / drafts are never cleared here.
+ * Reihenfolge: Fotos → Videos → PDF.
+ * ok = alles Erforderliche auf dem Firmenserver (PDF Pflicht; Fotos/Videos sofern vorhanden).
  */
 export async function uploadProtocolArchive(
   input: ProtocolArchiveUploadInput
 ): Promise<ProtocolArchiveUploadResult> {
-  void input.pdfBase64;
-  void input.pdfFilename;
+  const result: ProtocolArchiveUploadResult = {
+    ok: false,
+    photoUploaded: 0,
+    photoFailed: 0,
+    videoUploaded: 0,
+    videoFailed: 0,
+    pdfUploaded: false,
+  };
 
-  const mediaTotalRecords = await getMediaForSession(input.sessionKey);
-  const mediaTotal = mediaTotalRecords.length;
-  let mediaUploaded = 0;
-  let mediaFailed = 0;
+  if (!remoteConfigured()) {
+    return result;
+  }
 
-  const remoteConfigured = MEDIA_CONFIG.uploadTarget.kind !== "local-only";
+  const records = await getMediaForSession(input.sessionKey);
+  const photos = records.filter((r) => r.kind === "photo");
+  const videos = records.filter((r) => r.kind === "video");
 
-  if (remoteConfigured && mediaTotal > 0) {
-    for (const record of mediaTotalRecords) {
-      try {
-        await uploadMediaRecord(record.id);
-        mediaUploaded += 1;
-      } catch (error) {
-        mediaFailed += 1;
-        console.warn("[protocol-archive] media upload failed", record.id, error);
-      }
+  for (const record of photos) {
+    try {
+      await uploadMediaRecord(record.id);
+      result.photoUploaded += 1;
+    } catch (error) {
+      result.photoFailed += 1;
+      console.warn("[protocol-archive] photo failed", record.id, error);
     }
   }
 
-  // PDF → FTPS: reserved for the company FTPS integration (not Resend).
-  const pdfUploaded = false;
-
-  if (!remoteConfigured) {
-    return {
-      ok: false,
-      message:
-        "Server-Upload (FTPS) noch nicht verfügbar — PDF und Medien bleiben lokal gespeichert.",
-      mediaUploaded,
-      mediaFailed,
-      mediaTotal,
-      pdfUploaded,
-    };
+  for (const record of videos) {
+    try {
+      await uploadMediaRecord(record.id);
+      result.videoUploaded += 1;
+    } catch (error) {
+      result.videoFailed += 1;
+      console.warn("[protocol-archive] video failed", record.id, error);
+    }
   }
 
-  if (mediaFailed > 0) {
-    return {
-      ok: false,
-      message: `Medien-Upload teilweise fehlgeschlagen (${mediaUploaded}/${mediaTotal} ok). PDF-FTPS folgt später. Lokale Daten bleiben erhalten.`,
-      mediaUploaded,
-      mediaFailed,
-      mediaTotal,
-      pdfUploaded,
-    };
+  try {
+    result.pdfUploaded = await uploadPdfToServer(input.pdfFilename, input.pdfBase64);
+  } catch (error) {
+    result.pdfUploaded = false;
+    console.warn("[protocol-archive] pdf failed", error);
   }
 
-  if (mediaTotal === 0) {
-    return {
-      ok: false,
-      message:
-        "Keine Medien zum Hochladen. PDF-FTPS-Upload folgt später — Protokoll bleibt lokal gespeichert.",
-      mediaUploaded,
-      mediaFailed,
-      mediaTotal,
-      pdfUploaded,
-    };
-  }
+  result.ok =
+    result.pdfUploaded &&
+    result.photoFailed === 0 &&
+    result.videoFailed === 0;
 
-  return {
-    ok: true,
-    message: `Medien auf Server geladen (${mediaUploaded}/${mediaTotal}). PDF-FTPS-Upload folgt später.`,
-    mediaUploaded,
-    mediaFailed,
-    mediaTotal,
-    pdfUploaded,
-  };
+  return result;
 }
