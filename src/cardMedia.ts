@@ -191,12 +191,8 @@ function createUploadStatusRow(
     row.classList.add("is-error");
     const message = document.createElement("p");
     message.className = "media-upload-status-message";
-    message.textContent = [
-      "NAS-Upload fehlgeschlagen — Datei bleibt lokal gespeichert.",
-      record.uploadError ? `Meldung: ${record.uploadError}` : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
+    message.textContent =
+      "⚠ Server momentan nicht erreichbar. Die Datei wurde lokal gespeichert und kann später erneut übertragen werden.";
     row.appendChild(message);
 
     const retryButton = document.createElement("button");
@@ -365,12 +361,9 @@ function bindMediaControls(
     errorEl.classList.remove("hidden");
   };
 
-  const showUploadError = (message: string): void => {
-    errorEl.textContent = [
-      "NAS-Upload fehlgeschlagen — die Datei bleibt lokal gespeichert.",
-      "Sie können den Upload erneut versuchen.",
-      `Meldung: ${message}`,
-    ].join("\n");
+  const showUploadError = (): void => {
+    errorEl.textContent =
+      "⚠ Server momentan nicht erreichbar. Die Datei wurde lokal gespeichert und kann später erneut übertragen werden.";
     errorEl.classList.remove("hidden");
   };
 
@@ -425,9 +418,8 @@ function bindMediaControls(
                 clearCaptureError();
                 await reload();
               } catch (error) {
-                const message =
-                  error instanceof Error ? error.message : "NAS-Upload fehlgeschlagen.";
-                showUploadError(message);
+                console.error(error);
+                showUploadError();
                 await reload();
               }
             })();
@@ -458,7 +450,10 @@ function bindMediaControls(
       const result = await captureAndStoreMedia({ sessionKey, ownerKey, kind, file });
       await reload();
       if (!result.uploadOk) {
-        showUploadError(result.uploadError ?? "NAS-Upload fehlgeschlagen.");
+        if (result.uploadError) {
+          console.warn(result.uploadError);
+        }
+        showUploadError();
       } else {
         clearCaptureError();
       }
