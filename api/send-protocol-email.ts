@@ -9,48 +9,14 @@ export const config = {
   maxDuration: 60,
 };
 
-/** Keep in sync with src/emailConfig.ts ids/labels (company + employee). */
-const SENDERS: Record<string, { label: string; fromEmail: string }> = {
-  "kithan-gmbh-katrin": {
-    label: "Kithan GmbH + Katrin",
-    fromEmail: "noreply@example.com",
-  },
-  "kithan-gmbh-sascha": {
-    label: "Kithan GmbH + Sascha",
-    fromEmail: "noreply@example.com",
-  },
-  "kithan-grundstuecks-katrin": {
-    label: "Kithan Grundstücks- und Handels GmbH + Katrin",
-    fromEmail: "noreply@example.com",
-  },
-  "kithan-grundstuecks-sascha": {
-    label: "Kithan Grundstücks- und Handels GmbH + Sascha",
-    fromEmail: "noreply@example.com",
-  },
-  "kithan-leopoldstrasse-katrin": {
-    label: "Kithan Leopoldstraße GmbH + Katrin",
-    fromEmail: "noreply@example.com",
-  },
-  "kithan-erlangen-sascha": {
-    label: "Kithan Erlangen GmbH + Sascha",
-    fromEmail: "noreply@example.com",
-  },
-  "kita-projekt-koeln-katrin": {
-    label: "Kita Projekt Köln + Katrin",
-    fromEmail: "noreply@example.com",
-  },
-  "kithan-koeln-hyazinthenweg-sascha": {
-    label: "Kithan Köln GmbH Hyazinthenweg + Sascha",
-    fromEmail: "noreply@example.com",
-  },
-};
+/** Fixed, non-editable Absender address — keep in sync with src/emailConfig.ts. */
+const FIXED_SENDER_EMAIL = "info@kithan.de";
 
 const PLACEHOLDER_SUBJECT = "Übergabeprotokoll im Anhang";
 const PLACEHOLDER_BODY = "Übergabeprotokoll im Anhang";
 const MAX_PDF_BASE64_CHARS = 6_000_000; // ~4.5 MB binary
 
 interface SendBody {
-  senderId?: string;
   to?: string;
   filename?: string;
   pdfBase64?: string;
@@ -62,13 +28,9 @@ function isValidEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
-function resolveFrom(senderId: string): string {
-  const sender = SENDERS[senderId];
-  if (!sender) {
-    throw Object.assign(new Error("Ungültiger Absender."), { statusCode: 400 });
-  }
-  const email = process.env.RESEND_FROM_EMAIL?.trim() || sender.fromEmail;
-  return `${sender.label} <${email}>`;
+function resolveFrom(): string {
+  const email = process.env.RESEND_FROM_EMAIL?.trim() || FIXED_SENDER_EMAIL;
+  return email;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
@@ -92,17 +54,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     }
 
     const body = (typeof req.body === "string" ? JSON.parse(req.body) : req.body) as SendBody;
-    const senderId = String(body.senderId ?? "").trim();
     const to = String(body.to ?? "").trim().toLowerCase();
     const filename = String(body.filename ?? "Protokoll.pdf").trim() || "Protokoll.pdf";
     const pdfBase64 = String(body.pdfBase64 ?? "").replace(/\s+/g, "");
     const subject = String(body.subject ?? PLACEHOLDER_SUBJECT).trim() || PLACEHOLDER_SUBJECT;
     const text = String(body.text ?? PLACEHOLDER_BODY).trim() || PLACEHOLDER_BODY;
 
-    if (!SENDERS[senderId]) {
-      res.status(400).json({ ok: false, error: "Ungültiger Absender." });
-      return;
-    }
     if (!isValidEmail(to)) {
       res.status(400).json({ ok: false, error: "Ungültige Empfänger-E-Mail-Adresse." });
       return;
@@ -112,7 +69,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       return;
     }
 
-    const from = resolveFrom(senderId);
+    const from = resolveFrom();
     const safeFilename = filename.replace(/[^\w.\-äöüÄÖÜß ()]+/g, "_").slice(0, 120);
 
     const response = await fetch("https://api.resend.com/emails", {

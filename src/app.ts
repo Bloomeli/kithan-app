@@ -14,7 +14,6 @@ import {
   type SchluesselPdfEntry,
   type SchluesselPdfInput,
 } from "./generateProtocolPdf";
-import { EMAIL_SENDERS } from "./emailConfig";
 import { sendProtocolEmail } from "./sendProtocolEmail";
 import { uploadProtocolArchive } from "./protocolArchiveUpload";
 
@@ -856,7 +855,6 @@ let zeugeName = "";
 let zeugeAnschrift = "";
 /** Optional Mieter email send (after „abschließen“). */
 let protocolEmailTo = "";
-let protocolEmailSenderId = "";
 /** Mieter-PDF kept for the post-completion email step. */
 let completionMieterPdf: { filename: string; base64: string } | null = null;
 
@@ -2162,7 +2160,6 @@ function resetSignatureUiState(): void {
   zeugeName = "";
   zeugeAnschrift = "";
   protocolEmailTo = "";
-  protocolEmailSenderId = "";
   completionMieterPdf = null;
   signatureContainer.innerHTML = "";
   schluesselSignatureContainer.innerHTML = "";
@@ -2513,34 +2510,6 @@ function renderMieterEmailSection(parent: HTMLElement, mieterPdfOk: boolean): vo
   emailHeading.textContent = "📧 Mieter-PDF per E-Mail";
   emailBlock.appendChild(emailHeading);
 
-  const senderGroup = document.createElement("div");
-  senderGroup.className = "input-group";
-  const senderLabel = document.createElement("label");
-  senderLabel.htmlFor = "completion-email-sender";
-  senderLabel.textContent = "Absender:";
-  const senderSelect = document.createElement("select");
-  senderSelect.id = "completion-email-sender";
-
-  const placeholder = document.createElement("option");
-  placeholder.value = "";
-  placeholder.disabled = true;
-  placeholder.selected = true;
-  placeholder.textContent = "Bitte Absender wählen...";
-  senderSelect.appendChild(placeholder);
-
-  EMAIL_SENDERS.forEach((sender) => {
-    const option = document.createElement("option");
-    option.value = sender.id;
-    option.textContent = sender.label;
-    senderSelect.appendChild(option);
-  });
-
-  senderSelect.addEventListener("change", () => {
-    protocolEmailSenderId = senderSelect.value;
-  });
-  senderGroup.append(senderLabel, senderSelect);
-  emailBlock.appendChild(senderGroup);
-
   emailBlock.appendChild(
     createTextField(
       "completion-email-to",
@@ -2575,14 +2544,7 @@ function renderMieterEmailSection(parent: HTMLElement, mieterPdfOk: boolean): vo
         emailStatus.classList.remove("hidden");
         return;
       }
-      const senderId = protocolEmailSenderId.trim();
       const to = protocolEmailTo.trim();
-      if (!senderId) {
-        emailStatus.textContent = "Bitte Absender wählen.";
-        emailStatus.classList.add("is-error");
-        emailStatus.classList.remove("hidden");
-        return;
-      }
       if (!to) {
         emailStatus.textContent = "Bitte E-Mail-Adresse des Mieters eingeben.";
         emailStatus.classList.add("is-error");
@@ -2595,7 +2557,6 @@ function renderMieterEmailSection(parent: HTMLElement, mieterPdfOk: boolean): vo
       emailStatus.classList.remove("hidden");
 
       const result = await sendProtocolEmail({
-        senderId,
         to,
         filename: completionMieterPdf.filename,
         pdfBase64: completionMieterPdf.base64,

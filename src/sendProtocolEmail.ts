@@ -6,11 +6,9 @@ import {
   EMAIL_SEND_ENDPOINT,
   PROTOCOL_EMAIL_BODY,
   PROTOCOL_EMAIL_SUBJECT,
-  isKnownEmailSenderId,
 } from "./emailConfig";
 
 export interface SendProtocolEmailInput {
-  senderId: string;
   to: string;
   filename: string;
   pdfBase64: string;
@@ -25,9 +23,6 @@ export interface SendProtocolEmailResult {
 export async function sendProtocolEmail(
   input: SendProtocolEmailInput
 ): Promise<SendProtocolEmailResult> {
-  if (!isKnownEmailSenderId(input.senderId)) {
-    return { ok: false, error: "Ungültiger Absender." };
-  }
   const to = input.to.trim();
   if (!to) {
     return { ok: false, error: "Bitte Empfänger-E-Mail eingeben." };
@@ -38,7 +33,6 @@ export async function sendProtocolEmail(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        senderId: input.senderId,
         to,
         filename: input.filename,
         pdfBase64: input.pdfBase64,
