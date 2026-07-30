@@ -132,5 +132,15 @@
     </main>
 
     <script type="module" src="/src/app.ts"></script>
+    <script>
+      // Offline-Startfähigkeit: Service Worker cacht Kern-Dateien (HTML/CSS/JS/Icons).
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker.register("/service-worker.js").catch((error) => {
+            console.error("Service-Worker-Registrierung fehlgeschlagen:", error);
+          });
+        });
+      }
+    </script>
 </body>
 </html>
