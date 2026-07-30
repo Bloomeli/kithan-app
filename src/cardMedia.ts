@@ -183,7 +183,7 @@ function createUploadStatusRow(
 
   if (status === "uploaded") {
     row.classList.add("is-success");
-    row.textContent = "Auf NAS gespeichert";
+    row.textContent = "✅ Medien wurde erfolgreich gesendet.";
     return row;
   }
 

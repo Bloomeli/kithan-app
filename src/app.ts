@@ -2570,7 +2570,7 @@ function renderMieterEmailSection(parent: HTMLElement, mieterPdfOk: boolean): vo
         emailStatus.classList.add("is-error");
         return;
       }
-      emailStatus.textContent = "Mieter-PDF wurde per E-Mail gesendet.";
+      emailStatus.textContent = "✅ E-Mail wurde versendet.";
       emailStatus.classList.add("is-ok");
     })();
   });
