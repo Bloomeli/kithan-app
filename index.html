@@ -180,14 +180,39 @@
             });
         });
 
+        // Never yank the page out from under an in-flight upload (Blob PUT /
+        // FTPS-Transfer): a forced reload would kill that request mid-flight
+        // with no error, no catch, no log — looking exactly like the request
+        // "vanished". blobFtpsUpload.ts reports its active-upload count via
+        // this event; we defer the reload until it drops back to zero.
+        let activeUploads = 0;
         let reloadedForNewVersion = false;
-        navigator.serviceWorker.addEventListener("controllerchange", () => {
-          console.log("[sw-registration] controllerchange — a new service worker just took control");
+        let reloadPending = false;
+
+        const reloadIfSafe = () => {
           if (reloadedForNewVersion) {
             return;
           }
+          if (activeUploads > 0) {
+            reloadPending = true;
+            console.log(`[sw-registration] deferring reload — ${activeUploads} upload(s) still in progress`);
+            return;
+          }
           reloadedForNewVersion = true;
+          console.log("[sw-registration] reloading now to activate the new version");
           window.location.reload();
+        };
+
+        window.addEventListener("kithan-upload-count-change", (event) => {
+          activeUploads = event.detail;
+          if (activeUploads === 0 && reloadPending) {
+            reloadIfSafe();
+          }
+        });
+
+        navigator.serviceWorker.addEventListener("controllerchange", () => {
+          console.log("[sw-registration] controllerchange — a new service worker just took control");
+          reloadIfSafe();
         });
       }
     </script>
