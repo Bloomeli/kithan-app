@@ -7,6 +7,7 @@
 import { getMediaForSession } from "./mediaStore";
 import { MEDIA_CONFIG } from "./mediaConfig";
 import { uploadMediaRecord } from "./mediaService";
+import { uploadViaBlobAndFtps } from "./blobFtpsUpload";
 
 export interface ProtocolArchiveUploadInput {
   sessionKey: string;
@@ -24,31 +25,28 @@ export interface ProtocolArchiveUploadResult {
 }
 
 function remoteConfigured(): boolean {
-  return MEDIA_CONFIG.uploadTarget.kind !== "local-only" && Boolean(MEDIA_CONFIG.uploadTarget.endpoint);
+  return MEDIA_CONFIG.uploadTarget.kind !== "local-only";
 }
 
 async function uploadPdfToServer(filename: string, pdfBase64: string): Promise<boolean> {
-  const endpoint = MEDIA_CONFIG.uploadTarget.endpoint?.trim();
-  if (!endpoint || !pdfBase64) {
+  if (!pdfBase64) {
     return false;
   }
 
   const binary = Uint8Array.from(atob(pdfBase64), (c) => c.charCodeAt(0));
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/pdf",
-      "X-Kithan-Media-Id": `pdf-${Date.now()}`,
-      "X-Kithan-Kind": "pdf",
-      "X-Kithan-Owner": "protokoll",
-      "X-Kithan-Filename": filename.replace(/[^\w.\-äöüÄÖÜß]+/g, "_").slice(0, 120),
-    },
-    body: binary,
+  const blob = new Blob([binary], { type: "application/pdf" });
+
+  const result = await uploadViaBlobAndFtps({
+    kind: "pdf",
+    ownerKey: "protokoll",
+    mediaId: `pdf-${Date.now()}`,
+    mimeType: "application/pdf",
+    blob,
+    filename: filename.replace(/[^\w.\-äöüÄÖÜß ()]+/g, "_").slice(0, 150),
   });
 
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new Error(payload.error?.trim() || `PDF-Übertragung fehlgeschlagen (HTTP ${response.status}).`);
+  if (!result.ok) {
+    throw new Error(result.error || "PDF-Übertragung fehlgeschlagen.");
   }
   return true;
 }

@@ -1,9 +1,9 @@
 /**
  * Media quality and upload-target configuration.
- * Swap `uploadTarget` later for NAS/cloud without changing card/UI code.
+ * Swap `uploadTarget` later without changing card/UI code.
  */
 
-export type UploadTargetKind = "local-only" | "http" | "nas";
+export type UploadTargetKind = "local-only" | "http" | "blob-ftps";
 
 export interface MediaUploadTargetConfig {
   kind: UploadTargetKind;
@@ -43,7 +43,8 @@ export const MEDIA_CONFIG: MediaConfig = {
     reencode: false,
   },
   uploadTarget: {
-    kind: "nas",
-    endpoint: "/api/nas-upload",
+    // Direkter Client-Upload zu Vercel Blob + serverseitige FTPS-Übertragung
+    // (siehe src/blobFtpsUpload.ts, api/blob-upload-token.ts, api/ftps-transfer.ts).
+    kind: "blob-ftps",
   },
 };

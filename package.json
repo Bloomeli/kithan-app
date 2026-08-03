@@ -16,6 +16,8 @@
     "vite": "^6.0.0"
   },
   "dependencies": {
+    "@vercel/blob": "^2.6.1",
+    "basic-ftp": "^6.2.0",
     "jspdf": "^4.2.1"
   }
 }

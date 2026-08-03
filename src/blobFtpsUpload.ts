@@ -1,0 +1,117 @@
+/**
+ * Direkter Client-Upload zu Vercel Blob + serverseitige FTPS-Übertragung.
+ *
+ * Ablauf (für Foto, Video UND PDF gleichermaßen):
+ * 1. Browser lädt die Datei direkt zu Vercel Blob hoch (umgeht das 4,5-MB-Limit
+ *    von Vercel Serverless Functions — die Datei läuft dabei nicht durch unsere
+ *    eigene API-Route).
+ * 2. Anschließend ruft der Browser /api/ftps-transfer auf. Diese Funktion holt
+ *    die Datei von Vercel Blob ab und lädt sie per FTPS auf den Firmenserver hoch.
+ * 3. Bei Erfolg löscht /api/ftps-transfer die Datei wieder von Vercel Blob
+ *    (dient nur als kurzer Zwischenstopp, kein Dauerspeicher).
+ * 4. Schlägt die FTPS-Übertragung fehl, bleibt die Datei vorerst bei Vercel Blob
+ *    liegen, damit ein späterer manueller Retry (Button „Erneut hochladen“)
+ *    nichts verliert.
+ */
+
+import { upload } from "@vercel/blob/client";
+
+export type BlobFtpsMediaKind = "photo" | "video" | "pdf";
+
+export interface BlobFtpsUploadInput {
+  kind: BlobFtpsMediaKind;
+  ownerKey: string;
+  mediaId: string;
+  mimeType: string;
+  blob: Blob;
+  /** Explicit remote filename (used for the PDF, which already has a final name). */
+  filename?: string;
+}
+
+export interface BlobFtpsUploadResult {
+  ok: boolean;
+  error?: string;
+  remotePath?: string;
+}
+
+const BLOB_UPLOAD_TOKEN_ENDPOINT = "/api/blob-upload-token";
+const FTPS_TRANSFER_ENDPOINT = "/api/ftps-transfer";
+
+function extensionFor(mimeType: string, kind: BlobFtpsMediaKind): string {
+  const mime = mimeType.toLowerCase();
+  if (mime.includes("pdf")) return ".pdf";
+  if (mime.includes("jpeg") || mime.includes("jpg")) return ".jpg";
+  if (mime.includes("png")) return ".png";
+  if (mime.includes("webp")) return ".webp";
+  if (mime.includes("heic") || mime.includes("heif")) return ".heic";
+  if (mime.includes("mp4")) return ".mp4";
+  if (mime.includes("quicktime") || mime.includes("mov")) return ".mov";
+  if (mime.includes("webm")) return ".webm";
+  if (kind === "pdf") return ".pdf";
+  return kind === "video" ? ".mp4" : ".jpg";
+}
+
+function buildRemoteFilename(input: BlobFtpsUploadInput, ext: string): string {
+  if (input.filename?.trim()) {
+    return input.filename.trim();
+  }
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return `${input.kind}-${input.ownerKey}-${input.mediaId}-${stamp}${ext}`;
+}
+
+/**
+ * Uploads a single file (photo, video, or PDF) via Vercel Blob and triggers
+ * the server-side FTPS transfer to the company server. Used by both the
+ * media adapter (Foto/Video) and the protocol archive upload (PDF).
+ */
+export async function uploadViaBlobAndFtps(input: BlobFtpsUploadInput): Promise<BlobFtpsUploadResult> {
+  const ext = extensionFor(input.mimeType, input.kind);
+  const remoteFilename = buildRemoteFilename(input, ext);
+  const blobPathname = `${input.kind}/${input.ownerKey}-${input.mediaId}${ext}`;
+
+  let blobResult;
+  try {
+    blobResult = await upload(blobPathname, input.blob, {
+      access: "public",
+      handleUploadUrl: BLOB_UPLOAD_TOKEN_ENDPOINT,
+      contentType: input.mimeType || undefined,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Blob-Upload fehlgeschlagen.",
+    };
+  }
+
+  try {
+    const response = await fetch(FTPS_TRANSFER_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        blobUrl: blobResult.url,
+        filename: remoteFilename,
+        kind: input.kind,
+      }),
+    });
+
+    const payload = (await response.json().catch(() => ({}))) as {
+      ok?: boolean;
+      error?: string;
+      remotePath?: string;
+    };
+
+    if (!response.ok || payload.ok === false) {
+      return {
+        ok: false,
+        error: payload.error?.trim() || `FTPS-Übertragung fehlgeschlagen (HTTP ${response.status}).`,
+      };
+    }
+
+    return { ok: true, remotePath: payload.remotePath };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "FTPS-Übertragung fehlgeschlagen.",
+    };
+  }
+}
