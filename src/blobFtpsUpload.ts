@@ -98,6 +98,8 @@ export async function uploadViaBlobAndFtps(input: BlobFtpsUploadInput): Promise<
   const remoteFilename = buildRemoteFilename(input, ext);
   const blobPathname = `${input.kind}/${input.ownerKey}-${input.mediaId}${ext}`;
 
+  console.log(`[blob-ftps-upload] step 1/2: blob upload start (${input.kind}, ${blobPathname})`);
+
   let blobResult;
   const blobTimeout = timeoutSignal(
     BLOB_UPLOAD_TIMEOUT_MS,
@@ -111,6 +113,7 @@ export async function uploadViaBlobAndFtps(input: BlobFtpsUploadInput): Promise<
       abortSignal: blobTimeout.signal,
     });
   } catch (error) {
+    console.warn("[blob-ftps-upload] step 1/2: blob upload FAILED", error);
     return {
       ok: false,
       error: describeAbortError(error, "Blob-Upload fehlgeschlagen (Zeitüberschreitung)."),
@@ -118,6 +121,9 @@ export async function uploadViaBlobAndFtps(input: BlobFtpsUploadInput): Promise<
   } finally {
     blobTimeout.clear();
   }
+
+  console.log(`[blob-ftps-upload] step 1/2: blob upload done → ${blobResult.url}`);
+  console.log("[blob-ftps-upload] step 2/2: calling /api/ftps-transfer …");
 
   const ftpsTimeout = timeoutSignal(
     FTPS_TRANSFER_TIMEOUT_MS,
@@ -142,14 +148,17 @@ export async function uploadViaBlobAndFtps(input: BlobFtpsUploadInput): Promise<
     };
 
     if (!response.ok || payload.ok === false) {
+      console.warn("[blob-ftps-upload] step 2/2: ftps-transfer FAILED", response.status, payload);
       return {
         ok: false,
         error: payload.error?.trim() || `FTPS-Übertragung fehlgeschlagen (HTTP ${response.status}).`,
       };
     }
 
+    console.log(`[blob-ftps-upload] step 2/2: ftps-transfer done → ${payload.remotePath}`);
     return { ok: true, remotePath: payload.remotePath };
   } catch (error) {
+    console.warn("[blob-ftps-upload] step 2/2: ftps-transfer call threw", error);
     return {
       ok: false,
       error: describeAbortError(error, "FTPS-Übertragung fehlgeschlagen (Zeitüberschreitung)."),

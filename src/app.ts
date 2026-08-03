@@ -1002,6 +1002,13 @@ const schluesselEntriesContainer = requireElement<HTMLDivElement>("schluessel-en
 const gewaehlteObjektartHeading = requireElement<HTMLHeadingElement>("gewaehlte-objektart");
 const appSubtitle = requireElement<HTMLParagraphElement>("app-subtitle");
 const appTitle = requireElement<HTMLHeadingElement>("app-title");
+const appBuildStamp = requireElement<HTMLParagraphElement>("app-build-stamp");
+
+// Diagnostic only: makes it visible on-device which build is actually
+// running, so stale Service-Worker/PWA caching can be ruled in or out
+// without needing remote devtools access.
+appBuildStamp.textContent = `Build: ${__APP_BUILD__}`;
+console.log(`[kithan-app] Build: ${__APP_BUILD__}`);
 const labelBesichtigt = requireElement<HTMLLabelElement>("label-besichtigt");
 const labelBesichtigungsdatum = requireElement<HTMLLabelElement>("label-besichtigungsdatum");
 const headingRaeume = requireElement<HTMLHeadingElement>("heading-raeume");

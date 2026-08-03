@@ -10,7 +10,7 @@
  */
 
 // Bump this string on future deploys to force clients to refresh the cache.
-const CACHE_VERSION = "v1";
+const CACHE_VERSION = "v2";
 const CACHE_NAME = `kithan-app-${CACHE_VERSION}`;
 
 const CORE_ASSETS = ["/", "/index.html", "/style.css", "/icons/icon-180.png"];
