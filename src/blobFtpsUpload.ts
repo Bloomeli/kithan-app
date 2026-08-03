@@ -113,7 +113,16 @@ export async function uploadViaBlobAndFtps(input: BlobFtpsUploadInput): Promise<
       abortSignal: blobTimeout.signal,
     });
   } catch (error) {
-    console.warn("[blob-ftps-upload] step 1/2: blob upload FAILED", error);
+    console.error("[blob-ftps-upload] step 1/2: blob upload FAILED", {
+      kind: input.kind,
+      blobPathname,
+      mimeType: input.mimeType,
+      blobSize: input.blob.size,
+      errorName: error instanceof Error ? error.name : typeof error,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      errorStack: error instanceof Error ? error.stack : undefined,
+      rawError: error,
+    });
     return {
       ok: false,
       error: describeAbortError(error, "Blob-Upload fehlgeschlagen (Zeitüberschreitung)."),
@@ -148,7 +157,13 @@ export async function uploadViaBlobAndFtps(input: BlobFtpsUploadInput): Promise<
     };
 
     if (!response.ok || payload.ok === false) {
-      console.warn("[blob-ftps-upload] step 2/2: ftps-transfer FAILED", response.status, payload);
+      console.error("[blob-ftps-upload] step 2/2: ftps-transfer FAILED", {
+        kind: input.kind,
+        httpStatus: response.status,
+        httpStatusText: response.statusText,
+        blobUrl: blobResult.url,
+        responsePayload: payload,
+      });
       return {
         ok: false,
         error: payload.error?.trim() || `FTPS-Übertragung fehlgeschlagen (HTTP ${response.status}).`,
@@ -158,7 +173,14 @@ export async function uploadViaBlobAndFtps(input: BlobFtpsUploadInput): Promise<
     console.log(`[blob-ftps-upload] step 2/2: ftps-transfer done → ${payload.remotePath}`);
     return { ok: true, remotePath: payload.remotePath };
   } catch (error) {
-    console.warn("[blob-ftps-upload] step 2/2: ftps-transfer call threw", error);
+    console.error("[blob-ftps-upload] step 2/2: ftps-transfer call threw (network error, timeout, or CORS)", {
+      kind: input.kind,
+      blobUrl: blobResult.url,
+      errorName: error instanceof Error ? error.name : typeof error,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      errorStack: error instanceof Error ? error.stack : undefined,
+      rawError: error,
+    });
     return {
       ok: false,
       error: describeAbortError(error, "FTPS-Übertragung fehlgeschlagen (Zeitüberschreitung)."),

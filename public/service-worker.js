@@ -4,14 +4,25 @@
  * Strategie: online → Netzwerk laden + Cache aktualisieren; offline → aus Cache laden.
  *
  * Betrifft NUR das Starten/Laden der App selbst. Formular-Logik, PDF-Export
- * und E-Mail-Versand laufen unverändert weiter. API-Aufrufe (/api/...) und
- * der Firmenserver-Upload werden bewusst NICHT gecacht — die bleiben wie
- * vorgesehen von einer Internetverbindung abhängig.
+ * und E-Mail-Versand laufen unverändert weiter.
+ *
+ * NIEMALS gecacht / NIEMALS per Offline-Fallback beantwortet:
+ *  - jede Nicht-GET-Anfrage (POST/PUT/DELETE/...) — das betrifft ALLE Uploads
+ *    (Vercel-Blob-Client-Upload, /api/blob-upload-token, /api/ftps-transfer,
+ *    /api/send-protocol-email).
+ *  - alle /api/*-Routen, auch falls sie einmal per GET aufgerufen würden.
+ *  - alle Cross-Origin-Anfragen, insbesondere *.public.blob.vercel-storage.com
+ *    (der direkte Browser-Upload zu Vercel Blob läuft nie über diese Domain
+ *    hier, aber der Origin-Check deckt es zusätzlich defensiv ab).
+ * Diese Anfragen laufen immer direkt gegen das Netzwerk durch — siehe
+ * `shouldBypassCache()` unten.
  */
 
-// Bump this string on future deploys to force clients to refresh the cache.
-const CACHE_VERSION = "v2";
+// Bump this string on future deploys to force clients to purge the old cache
+// and re-fetch everything fresh (App-Shell + Bundle).
+const CACHE_VERSION = "v3";
 const CACHE_NAME = `kithan-app-${CACHE_VERSION}`;
+const SW_TAG = `[service-worker ${CACHE_VERSION}]`;
 
 const CORE_ASSETS = ["/", "/index.html", "/style.css", "/icons/icon-180.png"];
 
@@ -21,9 +32,10 @@ const CORE_ASSETS = ["/", "/index.html", "/style.css", "/icons/icon-180.png"];
  * cache whatever /assets/* and /icons/* files it actually references.
  */
 async function precacheCoreAssets(cache) {
-  await cache.addAll(CORE_ASSETS).catch(() => {
+  await cache.addAll(CORE_ASSETS).catch((error) => {
     // Best-effort — the runtime fetch handler below will still cache assets
     // opportunistically as they're requested during normal use.
+    console.warn(`${SW_TAG} precache of CORE_ASSETS failed (non-fatal)`, error);
   });
 
   try {
@@ -41,39 +53,75 @@ async function precacheCoreAssets(cache) {
           .catch(() => null)
       )
     );
-  } catch {
+    console.log(`${SW_TAG} precached ${assetUrls.length} hashed asset(s) from index.html`);
+  } catch (error) {
     // Offline during install or index.html unreachable — nothing more to do here.
+    console.warn(`${SW_TAG} could not read index.html to discover hashed assets (non-fatal)`, error);
   }
 }
 
 self.addEventListener("install", (event) => {
+  console.log(`${SW_TAG} installing…`);
   event.waitUntil(
     caches
       .open(CACHE_NAME)
       .then((cache) => precacheCoreAssets(cache))
-      .then(() => self.skipWaiting())
+      .then(() => {
+        console.log(`${SW_TAG} install complete, calling skipWaiting()`);
+        return self.skipWaiting();
+      })
   );
 });
 
 self.addEventListener("activate", (event) => {
+  console.log(`${SW_TAG} activating…`);
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))))
-      .then(() => self.clients.claim())
+      .then((keys) => {
+        const stale = keys.filter((key) => key !== CACHE_NAME);
+        if (stale.length > 0) {
+          console.log(`${SW_TAG} deleting ${stale.length} stale cache(s):`, stale);
+        }
+        return Promise.all(stale.map((key) => caches.delete(key)));
+      })
+      .then(() => {
+        console.log(`${SW_TAG} activate complete, calling clients.claim()`);
+        return self.clients.claim();
+      })
   );
 });
 
+/**
+ * Single source of truth for "this request must never be answered from the
+ * cache and must never fall back to an offline response". Keep this
+ * defensive and explicit — a false negative here would mean an upload or
+ * API call could silently get a stale/offline response.
+ */
+function shouldBypassCache(request, url) {
+  if (request.method !== "GET") {
+    // Every upload (Vercel Blob client upload, /api/blob-upload-token,
+    // /api/ftps-transfer, /api/send-protocol-email) is a non-GET request.
+    return true;
+  }
+  if (url.pathname.startsWith("/api/")) {
+    return true;
+  }
+  if (url.origin !== self.location.origin) {
+    // Cross-origin, e.g. *.public.blob.vercel-storage.com or Resend.
+    return true;
+  }
+  return false;
+}
+
 self.addEventListener("fetch", (event) => {
   const { request } = event;
-
-  if (request.method !== "GET") {
-    return;
-  }
-
   const url = new URL(request.url);
-  if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) {
-    // Cross-origin (e.g. Resend) and our own serverless endpoints stay network-only.
+
+  if (shouldBypassCache(request, url)) {
+    // Deliberately do NOT call event.respondWith() here — the browser
+    // handles the request exactly as if this Service Worker didn't exist,
+    // going straight to the network with no cache/offline-fallback logic.
     return;
   }
 
@@ -88,7 +136,8 @@ self.addEventListener("fetch", (event) => {
         }
         return response;
       })
-      .catch(async () => {
+      .catch(async (error) => {
+        console.warn(`${SW_TAG} network fetch failed, trying cache for`, url.pathname, error);
         const cached = await caches.match(request);
         if (cached) {
           return cached;

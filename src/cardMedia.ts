@@ -418,7 +418,10 @@ function bindMediaControls(
                 clearCaptureError();
                 await reload();
               } catch (error) {
-                console.error(error);
+                console.error(
+                  `[cardMedia] manual retry failed for mediaId=${record.id} kind=${record.kind} — showing "Server momentan nicht erreichbar"`,
+                  error
+                );
                 showUploadError();
                 await reload();
               }
@@ -464,7 +467,10 @@ function bindMediaControls(
         await uploadMediaRecord(mediaId);
         clearCaptureError();
       } catch (error) {
-        console.warn(error);
+        console.error(
+          `[cardMedia] background upload after capture failed for mediaId=${mediaId} kind=${kind} — showing "Server momentan nicht erreichbar"`,
+          error
+        );
         showUploadError();
       } finally {
         await reload();

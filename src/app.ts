@@ -2615,6 +2615,9 @@ function renderCompletionTop(
   if (archiveOk && mieterPdfOk) {
     banner.textContent = `✅ ${kind} erfolgreich abgeschlossen. PDF, Fotos und Videos wurden erfolgreich auf den Firmenserver übertragen.`;
   } else {
+    console.error(
+      `[renderCompletionTop] showing "Server momentan nicht erreichbar" — archiveOk=${archiveOk} mieterPdfOk=${mieterPdfOk}. See earlier [finishProtocolAsPdf]/[uploadMediaRecord]/[blob-ftps-upload] logs above for the actual cause.`
+    );
     banner.classList.add("is-error");
     banner.textContent =
       "⚠ Server momentan nicht erreichbar. Das Protokoll wurde lokal gespeichert und kann später erneut übertragen werden.";
@@ -2677,7 +2680,14 @@ async function finishProtocolAsPdf(): Promise<void> {
     );
     mieterPdfOk = true;
   } catch (error) {
-    console.error(error);
+    // This happens BEFORE any network request — if this throws, the archive
+    // upload below is skipped entirely (no Blob/FTPS call at all), yet the
+    // banner would still say "Server momentan nicht erreichbar", which is
+    // misleading: the real cause here is local PDF generation, not the network.
+    console.error(
+      "[finishProtocolAsPdf] PDF generation FAILED — archive upload will be skipped entirely (no network request will be made), but the banner will still read 'Server momentan nicht erreichbar':",
+      error
+    );
     completionMieterPdf = null;
     mieterPdfOk = false;
   }
@@ -2692,10 +2702,15 @@ async function finishProtocolAsPdf(): Promise<void> {
         pdfBase64: completionMieterPdf.base64,
       });
       archiveOk = archive.ok;
+      console.log("[finishProtocolAsPdf] uploadProtocolArchive result:", archive);
     } catch (error) {
-      console.error(error);
+      console.error("[finishProtocolAsPdf] uploadProtocolArchive threw unexpectedly:", error);
       archiveOk = false;
     }
+  } else {
+    console.warn(
+      "[finishProtocolAsPdf] Skipping uploadProtocolArchive entirely — mieterPdfOk is false (see PDF generation error above)."
+    );
   }
 
   // Only after all transfers finished: final message + email section (no form body).

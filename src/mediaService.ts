@@ -73,6 +73,7 @@ export async function uploadMediaRecord(recordOrId: MediaRecord | string): Promi
       uploadError: "",
       remotePath: result.remotePath,
     });
+    console.log(`[uploadMediaRecord] OK id=${id} kind=${uploadBody.kind} remotePath=${result.remotePath ?? "(none)"}`);
     return (
       updated ?? {
         ...uploadBody,
@@ -84,6 +85,21 @@ export async function uploadMediaRecord(recordOrId: MediaRecord | string): Promi
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Server-Upload fehlgeschlagen.";
+    // This is the exact spot where a failed upload turns into the
+    // employee-facing "Server momentan nicht erreichbar" message — log the
+    // real, technical reason here so it can be inspected (e.g. via Safari
+    // Web Inspector) even though the UI intentionally shows a simplified text.
+    console.error("[uploadMediaRecord] FAILED — this is why 'Server momentan nicht erreichbar' is shown:", {
+      mediaId: id,
+      kind: uploadBody.kind,
+      mimeType: uploadBody.mimeType,
+      blobSize: uploadBody.blob.size,
+      uploadTargetKind: MEDIA_CONFIG.uploadTarget.kind,
+      errorName: error instanceof Error ? error.name : typeof error,
+      errorMessage: message,
+      errorStack: error instanceof Error ? error.stack : undefined,
+      rawError: error,
+    });
     const failed = await updateMediaUploadState(id, {
       uploadStatus: "failed",
       uploadError: message,

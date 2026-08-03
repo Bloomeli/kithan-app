@@ -147,6 +147,24 @@
           navigator.serviceWorker
             .register("/service-worker.js")
             .then((registration) => {
+              console.log(
+                "[sw-registration] registered, active worker script:",
+                registration.active ? registration.active.scriptURL : "(none yet)"
+              );
+
+              if (registration.installing) {
+                console.log("[sw-registration] a new service worker is installing…");
+              }
+              registration.addEventListener("updatefound", () => {
+                const installing = registration.installing;
+                console.log("[sw-registration] update found, new worker state:", installing && installing.state);
+                if (installing) {
+                  installing.addEventListener("statechange", () => {
+                    console.log("[sw-registration] new worker state changed to:", installing.state);
+                  });
+                }
+              });
+
               registration.update().catch(() => {});
               document.addEventListener("visibilitychange", () => {
                 if (document.visibilityState === "visible") {
@@ -164,6 +182,7 @@
 
         let reloadedForNewVersion = false;
         navigator.serviceWorker.addEventListener("controllerchange", () => {
+          console.log("[sw-registration] controllerchange — a new service worker just took control");
           if (reloadedForNewVersion) {
             return;
           }
