@@ -13,7 +13,7 @@ import {
 
 export type MediaKind = "photo" | "video";
 
-/** NAS upload lifecycle — local IndexedDB always keeps the blob regardless of status. */
+/** Server-Upload lifecycle — local IndexedDB always keeps the blob regardless of status. */
 export type MediaUploadStatus = "pending" | "uploading" | "uploaded" | "failed";
 
 /** In-memory / API shape — always exposes a Blob for UI. */

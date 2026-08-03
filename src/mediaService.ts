@@ -1,11 +1,10 @@
 /**
- * Media facade: process capture → local IndexedDB → optional NAS upload via proxy.
+ * Media facade: process capture → local IndexedDB → optional server upload (Vercel Blob + FTPS).
  * Local save always wins: upload failure never deletes IndexedDB media.
  */
 
 import {
   createMediaId,
-  getMediaById,
   loadMediaForUpload,
   saveMedia,
   updateMediaUploadState,
@@ -32,9 +31,6 @@ export interface CaptureMediaInput {
 
 export interface CaptureMediaResult {
   record: MediaRecord;
-  /** False when local save succeeded but NAS upload failed or was skipped. */
-  uploadOk: boolean;
-  uploadError?: string;
 }
 
 function uploadEnabled(): boolean {
@@ -43,7 +39,7 @@ function uploadEnabled(): boolean {
 
 /**
  * Upload a record that is already safely in IndexedDB.
- * Always re-reads + detaches bytes before status writes and the NAS fetch.
+ * Always re-reads + detaches bytes before status writes and the upload call.
  */
 export async function uploadMediaRecord(recordOrId: MediaRecord | string): Promise<MediaRecord> {
   const id = typeof recordOrId === "string" ? recordOrId : recordOrId.id;
@@ -87,7 +83,7 @@ export async function uploadMediaRecord(recordOrId: MediaRecord | string): Promi
     );
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "NAS-Upload fehlgeschlagen.";
+      error instanceof Error ? error.message : "Server-Upload fehlgeschlagen.";
     const failed = await updateMediaUploadState(id, {
       uploadStatus: "failed",
       uploadError: message,
@@ -103,8 +99,12 @@ export async function uploadMediaRecord(recordOrId: MediaRecord | string): Promi
 }
 
 /**
- * Process (resize photo when possible / keep video) and persist locally,
- * then attempt NAS upload. Capture succeeds even if upload fails.
+ * Process (resize photo when possible / keep video) and persist locally.
+ * Resolves as soon as the local IndexedDB save succeeds — deliberately does
+ * NOT wait for the (potentially slow, multi-hop) server upload, so the UI
+ * can show the new thumbnail immediately. Callers trigger the upload
+ * separately via `uploadMediaRecord` (fire-and-forget, same as the manual
+ * "Erneut hochladen" retry path) and refresh the UI once it settles.
  */
 export async function captureAndStoreMedia(input: CaptureMediaInput): Promise<CaptureMediaResult> {
   const ctx = createMediaDiagContext(input.kind, input.file);
@@ -114,7 +114,6 @@ export async function captureAndStoreMedia(input: CaptureMediaInput): Promise<Ca
   });
   await logStorageEstimate(ctx);
 
-  let saved: MediaRecord;
   try {
     const processed = await processCapturedMedia(input.kind, input.file, ctx);
     const record: MediaRecord = {
@@ -127,39 +126,16 @@ export async function captureAndStoreMedia(input: CaptureMediaInput): Promise<Ca
       createdAt: Date.now(),
       uploadStatus: "pending",
     };
-    saved = await saveMedia(record, ctx);
+    const saved = await saveMedia(record, ctx);
     await logStorageEstimate(ctx);
     mediaDiagLog(ctx, "idb-put-done", {
       storageMode: saved.storageMode ?? "(unknown)",
       id: saved.id,
     });
+    return { record: saved };
   } catch (error) {
     mediaDiagError(ctx, "error", error);
     throw new MediaCaptureError(ctx, error);
-  }
-
-  if (!uploadEnabled()) {
-    return { record: saved, uploadOk: true };
-  }
-
-  try {
-    // Pass id only — upload path always opens a fresh IDB read.
-    const uploaded = await uploadMediaRecord(saved.id);
-    return { record: uploaded, uploadOk: true };
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "NAS-Upload fehlgeschlagen.";
-    console.warn(`[media-upload ${ctx.diagnosisId}]`, message, error);
-    const failed =
-      (error && typeof error === "object" && "record" in error
-        ? (error as { record: MediaRecord }).record
-        : null) ??
-      (await getMediaById(saved.id)) ?? {
-        ...saved,
-        uploadStatus: "failed" as const,
-        uploadError: message,
-      };
-    return { record: failed, uploadOk: false, uploadError: message };
   }
 }
 

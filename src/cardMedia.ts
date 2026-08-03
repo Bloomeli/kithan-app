@@ -1,4 +1,4 @@
-/** Foto/Video capture controls for room and meter cards (IndexedDB + NAS upload). */
+/** Foto/Video capture controls for room and meter cards (IndexedDB + Server-Upload). */
 
 import { deleteMedia, getMediaForOwner, type MediaKind, type MediaRecord } from "./mediaStore";
 import { captureAndStoreMedia, uploadMediaRecord } from "./mediaService";
@@ -177,7 +177,7 @@ function createUploadStatusRow(
 
   if (status === "uploading") {
     row.classList.add("is-uploading");
-    row.textContent = "Wird auf NAS hochgeladen…";
+    row.textContent = "Wird auf den Server übertragen…";
     return row;
   }
 
@@ -446,20 +446,30 @@ function bindMediaControls(
     }
 
     clearCaptureError();
+    let mediaId: string;
     try {
       const result = await captureAndStoreMedia({ sessionKey, ownerKey, kind, file });
-      await reload();
-      if (!result.uploadOk) {
-        if (result.uploadError) {
-          console.warn(result.uploadError);
-        }
-        showUploadError();
-      } else {
-        clearCaptureError();
-      }
+      mediaId = result.record.id;
     } catch (error) {
       showCaptureError(error);
+      return;
     }
+
+    // Show the new thumbnail right away — don't block on the (potentially
+    // slow, multi-hop) server upload, which runs in the background below.
+    await reload();
+
+    void (async () => {
+      try {
+        await uploadMediaRecord(mediaId);
+        clearCaptureError();
+      } catch (error) {
+        console.warn(error);
+        showUploadError();
+      } finally {
+        await reload();
+      }
+    })();
   };
 
   photoButton.addEventListener("click", () => {

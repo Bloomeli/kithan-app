@@ -7,7 +7,7 @@ export type UploadTargetKind = "local-only" | "http" | "blob-ftps";
 
 export interface MediaUploadTargetConfig {
   kind: UploadTargetKind;
-  /** Browser-facing proxy endpoint (never the NAS URL or credentials). */
+  /** Browser-facing proxy endpoint (never the server URL or credentials). */
   endpoint?: string;
   /** Free-form adapter options (non-secret). */
   options?: Record<string, string>;
