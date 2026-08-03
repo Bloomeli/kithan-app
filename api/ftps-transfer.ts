@@ -107,6 +107,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       return;
     }
 
+    console.log(`[ftps-transfer] request received: kind=${kind} filename=${filename}`);
+
     let buffer: Buffer;
     try {
       const blobResponse = await fetch(blobUrl);
@@ -139,6 +141,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       console.warn("[ftps-transfer] blob cleanup failed after successful FTPS upload", error);
     }
 
+    console.log(`[ftps-transfer] success: ${remotePath}`);
     res.status(200).json({ ok: true, remotePath });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unbekannter Fehler bei der FTPS-Übertragung.";

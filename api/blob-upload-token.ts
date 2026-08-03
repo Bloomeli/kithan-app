@@ -36,12 +36,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     const jsonResponse = await handleUpload({
       body,
       request: req,
-      onBeforeGenerateToken: async () => {
+      onBeforeGenerateToken: async (pathname) => {
+        console.log("[blob-upload-token] token issued for", pathname);
         return {
           allowedContentTypes: ALLOWED_CONTENT_TYPES,
           maximumSizeInBytes: MAX_UPLOAD_BYTES,
           addRandomSuffix: true,
         };
+      },
+      onUploadCompleted: async ({ blob }) => {
+        // Vercel calls this asynchronously (server-to-server) once the direct
+        // browser upload lands in Blob storage — independent of the client's
+        // own upload()/fetch() calls, purely for diagnosis in Vercel logs.
+        console.log("[blob-upload-token] upload completed:", blob.url);
       },
     });
 

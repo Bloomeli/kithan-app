@@ -37,6 +37,35 @@ export interface BlobFtpsUploadResult {
 const BLOB_UPLOAD_TOKEN_ENDPOINT = "/api/blob-upload-token";
 const FTPS_TRANSFER_ENDPOINT = "/api/ftps-transfer";
 
+// Neither the direct browser→Vercel-Blob upload nor fetch() have a built-in
+// timeout. Without one, a stalled mobile connection (e.g. the network drops
+// or the tab is briefly suspended right after the camera hands control back)
+// leaves the upload promise hanging forever — no success, no error, no retry
+// button. These bounds guarantee the flow eventually fails visibly instead.
+const BLOB_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000; // generous for large videos on slow networks
+const FTPS_TRANSFER_TIMEOUT_MS = 70 * 1000; // just above the function's own 60s maxDuration
+
+function timeoutSignal(ms: number, message: string): { signal: AbortSignal; clear: () => void } {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    try {
+      controller.abort(new Error(message));
+    } catch {
+      controller.abort();
+    }
+  }, ms);
+  return { signal: controller.signal, clear: () => clearTimeout(timer) };
+}
+
+function describeAbortError(error: unknown, fallback: string): string {
+  if (error instanceof Error) {
+    // A DOMException "AbortError" without our custom reason (older engines
+    // that ignore AbortController.abort(reason)) still needs a clear message.
+    return error.name === "AbortError" && error.message !== fallback ? fallback : error.message;
+  }
+  return fallback;
+}
+
 function extensionFor(mimeType: string, kind: BlobFtpsMediaKind): string {
   const mime = mimeType.toLowerCase();
   if (mime.includes("pdf")) return ".pdf";
@@ -70,19 +99,30 @@ export async function uploadViaBlobAndFtps(input: BlobFtpsUploadInput): Promise<
   const blobPathname = `${input.kind}/${input.ownerKey}-${input.mediaId}${ext}`;
 
   let blobResult;
+  const blobTimeout = timeoutSignal(
+    BLOB_UPLOAD_TIMEOUT_MS,
+    "Blob-Upload abgebrochen (Zeitüberschreitung — Netzwerkverbindung unterbrochen?)."
+  );
   try {
     blobResult = await upload(blobPathname, input.blob, {
       access: "public",
       handleUploadUrl: BLOB_UPLOAD_TOKEN_ENDPOINT,
       contentType: input.mimeType || undefined,
+      abortSignal: blobTimeout.signal,
     });
   } catch (error) {
     return {
       ok: false,
-      error: error instanceof Error ? error.message : "Blob-Upload fehlgeschlagen.",
+      error: describeAbortError(error, "Blob-Upload fehlgeschlagen (Zeitüberschreitung)."),
     };
+  } finally {
+    blobTimeout.clear();
   }
 
+  const ftpsTimeout = timeoutSignal(
+    FTPS_TRANSFER_TIMEOUT_MS,
+    "FTPS-Übertragung abgebrochen (Zeitüberschreitung — Server antwortet nicht)."
+  );
   try {
     const response = await fetch(FTPS_TRANSFER_ENDPOINT, {
       method: "POST",
@@ -92,6 +132,7 @@ export async function uploadViaBlobAndFtps(input: BlobFtpsUploadInput): Promise<
         filename: remoteFilename,
         kind: input.kind,
       }),
+      signal: ftpsTimeout.signal,
     });
 
     const payload = (await response.json().catch(() => ({}))) as {
@@ -111,7 +152,9 @@ export async function uploadViaBlobAndFtps(input: BlobFtpsUploadInput): Promise<
   } catch (error) {
     return {
       ok: false,
-      error: error instanceof Error ? error.message : "FTPS-Übertragung fehlgeschlagen.",
+      error: describeAbortError(error, "FTPS-Übertragung fehlgeschlagen (Zeitüberschreitung)."),
     };
+  } finally {
+    ftpsTimeout.clear();
   }
 }
