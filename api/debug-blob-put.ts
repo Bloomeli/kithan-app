@@ -15,7 +15,14 @@
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { generateClientTokenFromReadWriteToken } from "@vercel/blob/client";
-import { getBlobReadWriteToken } from "../shared/blobEnv";
+
+function getBlobReadWriteToken(): string {
+  const token = process.env.PUBLIC_BLOB_READ_WRITE_TOKEN;
+  if (!token) {
+    throw new Error("Server-Konfiguration unvollstaendig (PUBLIC_BLOB_READ_WRITE_TOKEN fehlt).");
+  }
+  return token;
+}
 
 export const config = {
   maxDuration: 30,
