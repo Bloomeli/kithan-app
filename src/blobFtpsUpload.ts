@@ -112,6 +112,19 @@ function buildRemoteFilename(input: BlobFtpsUploadInput, ext: string): string {
  * opaque call, per explicit request for TOKEN_RECEIVED / BLOB_UPLOAD_CALL
  * as distinct diagnostic markers.
  */
+/** Error subtype carrying raw HTTP status + response body for logging (point 2). */
+class TokenRequestError extends Error {
+  constructor(
+    message: string,
+    public readonly httpStatus?: number,
+    public readonly httpStatusText?: string,
+    public readonly responseBody?: string
+  ) {
+    super(message);
+    this.name = "TokenRequestError";
+  }
+}
+
 async function fetchClientToken(pathname: string, signal: AbortSignal): Promise<string> {
   const response = await fetch(BLOB_UPLOAD_TOKEN_ENDPOINT, {
     method: "POST",
@@ -124,14 +137,91 @@ async function fetchClientToken(pathname: string, signal: AbortSignal): Promise<
   });
 
   if (!response.ok) {
-    throw new Error(`Token-Anfrage fehlgeschlagen (HTTP ${response.status}).`);
+    const bodyText = await response.text().catch(() => "(Response-Body konnte nicht gelesen werden)");
+    throw new TokenRequestError(
+      `Token-Anfrage fehlgeschlagen (HTTP ${response.status}).`,
+      response.status,
+      response.statusText,
+      bodyText
+    );
   }
 
-  const data = (await response.json().catch(() => ({}))) as { clientToken?: string; error?: string };
+  const bodyText = await response.text();
+  let data: { clientToken?: string; error?: string };
+  try {
+    data = JSON.parse(bodyText) as { clientToken?: string; error?: string };
+  } catch {
+    throw new TokenRequestError(
+      "Token-Antwort ist kein gültiges JSON.",
+      response.status,
+      response.statusText,
+      bodyText
+    );
+  }
   if (!data.clientToken) {
-    throw new Error(data.error?.trim() || "Kein Client-Token in der Antwort enthalten.");
+    throw new TokenRequestError(
+      data.error?.trim() || "Kein Client-Token in der Antwort enthalten.",
+      response.status,
+      response.statusText,
+      bodyText
+    );
   }
   return data.clientToken;
+}
+
+/**
+ * Best-effort classification of a put()-failure into a likely bucket, purely
+ * to speed up reading the raw error below — this does NOT change any
+ * behavior and is not a fix, just an interpretation aid. `put()` (from
+ * @vercel/blob/client) does not expose the raw HTTP status/response body on
+ * failure (verified by inspecting node_modules/@vercel/blob/dist/chunk-*.js:
+ * on the wire it uses XMLHttpRequest under the hood on Safari/iOS, and
+ * XHR's onerror handler deliberately collapses ALL of {CORS block, DNS
+ * failure, TLS failure, connection refused} into one generic
+ * `TypeError: Network request failed`, by browser design, for security
+ * reasons — no JS API can distinguish between them). Safari's OWN native
+ * console output (not ours) is the only place the real reason (e.g. an
+ * explicit CORS error line) would show up.
+ */
+function classifyPutError(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return "unknown (not an Error instance)";
+  }
+  if (error.name === "AbortError") {
+    return "aborted (our own timeout, OR the page/tab was suspended/reloaded mid-request)";
+  }
+  if (error.name === "TypeError" && /network request failed/i.test(error.message)) {
+    return (
+      "network-level failure at the browser's XHR layer — could be CORS block, DNS failure, " +
+      "TLS/certificate error, or connection refused. CONFIRMED recurring cause in this app: the " +
+      "client token expiring mid-upload (@vercel/blob's vercel.com/api/blob rejects an expired " +
+      "token with HTTP 400 but WITHOUT an Access-Control-Allow-Origin header, so the browser " +
+      "reports this generic 'CORS' error instead of 'Token expired' — see api/blob-upload-token.ts " +
+      "validUntil). If this fires again, check upload duration vs. TOKEN_VALID_MS there."
+    );
+  }
+  if (error.name === "TypeError" && /network request timed out/i.test(error.message)) {
+    return "browser-level XHR timeout (distinct from our own AbortController timeout)";
+  }
+  if (/content type/i.test(error.message) || error.name === "BlobContentTypeNotAllowedError") {
+    return "server rejected the MIME type (does not match allowedContentTypes on the token)";
+  }
+  if (/file length|too large/i.test(error.message)) {
+    return "server rejected the file as too large (maximumSizeInBytes on the token)";
+  }
+  if (/token expired/i.test(error.message) || error.name === "BlobClientTokenExpiredError") {
+    return "the client token had already expired before/during the PUT";
+  }
+  if (/pathname.*does not match/i.test(error.message)) {
+    return "pathname does not match what the token was issued for";
+  }
+  if (error.name === "BlobAccessError" || /access denied/i.test(error.message)) {
+    return "server rejected the token (invalid/malformed/wrong store)";
+  }
+  if (error.name === "BlobStoreSuspendedError") {
+    return "the Vercel Blob store itself is suspended";
+  }
+  return `unclassified — read errorName/errorMessage/errorStack above (name=${error.name})`;
 }
 
 /**
@@ -169,6 +259,7 @@ async function runUploadViaBlobAndFtps(input: BlobFtpsUploadInput): Promise<Blob
       clientToken = await fetchClientToken(blobPathname, blobTimeout.signal);
       console.log(`[blob-ftps-upload] TOKEN_RECEIVED kind=${input.kind} pathname=${blobPathname}`);
     } catch (error) {
+      const tokenErr = error instanceof TokenRequestError ? error : undefined;
       console.error("[blob-ftps-upload] BLOB_UPLOAD_ERROR (token request failed, PUT was never attempted)", {
         stage: "token",
         kind: input.kind,
@@ -176,6 +267,9 @@ async function runUploadViaBlobAndFtps(input: BlobFtpsUploadInput): Promise<Blob
         errorName: error instanceof Error ? error.name : typeof error,
         errorMessage: error instanceof Error ? error.message : String(error),
         errorStack: error instanceof Error ? error.stack : undefined,
+        httpStatus: tokenErr?.httpStatus,
+        httpStatusText: tokenErr?.httpStatusText,
+        responseBody: tokenErr?.responseBody,
         rawError: error,
       });
       return {
@@ -184,7 +278,12 @@ async function runUploadViaBlobAndFtps(input: BlobFtpsUploadInput): Promise<Blob
       };
     }
 
-    console.log(`[blob-ftps-upload] BLOB_UPLOAD_CALL kind=${input.kind} pathname=${blobPathname}`);
+    // Eindeutiger Log UNMITTELBAR VOR put() — Punkt 3.
+    console.log(
+      `[blob-ftps-upload] BLOB_UPLOAD_CALL kind=${input.kind} pathname=${blobPathname} ` +
+        `mimeType=${input.mimeType || "(leer)"} bytes=${input.blob.size} online=${navigator.onLine} ` +
+        `visibility=${document.visibilityState}`
+    );
     try {
       blobResult = await put(blobPathname, input.blob, {
         access: "public",
@@ -201,6 +300,11 @@ async function runUploadViaBlobAndFtps(input: BlobFtpsUploadInput): Promise<Blob
           }
         },
       });
+      // Eindeutiger Log UNMITTELBAR NACH put() — Punkt 3. (BLOB_UPLOAD_SUCCESS
+      // unten folgt erst nach dem finally-Block, dieser Log hier steht in der
+      // exakt selben try-Anweisung wie der put()-Aufruf, ohne jeden weiteren
+      // await dazwischen.)
+      console.log(`[blob-ftps-upload] PUT_RETURNED kind=${input.kind} url=${blobResult.url}`);
     } catch (error) {
       console.error("[blob-ftps-upload] BLOB_UPLOAD_ERROR (PUT to Vercel Blob failed)", {
         stage: "put",
@@ -208,9 +312,13 @@ async function runUploadViaBlobAndFtps(input: BlobFtpsUploadInput): Promise<Blob
         blobPathname,
         mimeType: input.mimeType,
         blobSize: input.blob.size,
+        online: navigator.onLine,
+        visibility: document.visibilityState,
         errorName: error instanceof Error ? error.name : typeof error,
         errorMessage: error instanceof Error ? error.message : String(error),
         errorStack: error instanceof Error ? error.stack : undefined,
+        likelyCause: classifyPutError(error),
+        note: "put() von @vercel/blob/client legt bei Fehlern KEINEN rohen HTTP-Status/Response-Body offen (auf Safari/iOS läuft der PUT intern über XMLHttpRequest — dessen onerror liefert nur ein generisches 'Network request failed', ohne Grund). Prüfe zusätzlich Safaris EIGENE, native Konsolenausgabe (rote Zeilen, nicht von uns geloggt) für CORS/TLS/DNS-Details.",
         rawError: error,
       });
       return {

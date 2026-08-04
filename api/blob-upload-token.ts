@@ -17,6 +17,18 @@ export const config = {
 const ALLOWED_CONTENT_TYPES = ["image/*", "video/*", "application/pdf"];
 const MAX_UPLOAD_BYTES = 500 * 1024 * 1024; // 500 MB safety ceiling
 
+// @vercel/blob defaults the client token's validUntil to just 30 seconds
+// from now (see generateClientTokenFromReadWriteToken in @vercel/blob's own
+// client.js). On a slow mobile connection, uploading a photo/video can easily
+// take longer than that — the token then expires mid-upload, vercel.com/api/blob
+// rejects the PUT with HTTP 400, and (confirmed via @vercel/blob source +
+// https://github.com/vercel/storage/issues/456 and /issues/812) that specific
+// error response is NOT sent with an Access-Control-Allow-Origin header, so
+// the browser reports it as an opaque CORS failure instead of "Token expired".
+// Set generously above our own client-side upload timeout (5 minutes) so the
+// token never expires before our own timeout would already have failed it.
+const TOKEN_VALID_MS = 10 * 60 * 1000;
+
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
   res.setHeader("Cache-Control", "no-store");
 
@@ -42,6 +54,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
           allowedContentTypes: ALLOWED_CONTENT_TYPES,
           maximumSizeInBytes: MAX_UPLOAD_BYTES,
           addRandomSuffix: true,
+          validUntil: Date.now() + TOKEN_VALID_MS,
         };
       },
       onUploadCompleted: async ({ blob }) => {
