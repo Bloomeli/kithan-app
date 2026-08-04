@@ -15,6 +15,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { Client } from "basic-ftp";
 import { Readable } from "node:stream";
 import { del } from "@vercel/blob";
+import { getBlobReadWriteToken } from "./_blobEnv";
 
 export const config = {
   maxDuration: 60,
@@ -135,7 +136,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     }
 
     try {
-      await del(blobUrl);
+      await del(blobUrl, { token: getBlobReadWriteToken() });
     } catch (error) {
       // FTPS succeeded — cleanup failure is non-critical, just log it.
       console.warn("[ftps-transfer] blob cleanup failed after successful FTPS upload", error);

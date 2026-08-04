@@ -3,12 +3,15 @@
  * (Foto/Video/PDF) zu Vercel Blob, sodass große Dateien nicht durch das
  * 4,5-MB-Limit von Vercel Serverless Functions laufen müssen.
  *
- * Benötigt BLOB_READ_WRITE_TOKEN als Vercel-Umgebungsvariable (wird beim
- * Verbinden eines Blob-Stores mit dem Projekt automatisch angelegt).
+ * Benötigt PUBLIC_BLOB_READ_WRITE_TOKEN als Vercel-Umgebungsvariable (siehe
+ * api/_blobEnv.ts — der ursprüngliche, mit dem Projekt verbundene Store war
+ * als "privat" angelegt, was sich bei Vercel Blob nicht nachträglich ändern
+ * lässt; deshalb ein neuer, öffentlicher Store mit eigenem Prefix).
  */
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
+import { getBlobReadWriteToken } from "./_blobEnv";
 
 export const config = {
   maxDuration: 30,
@@ -48,6 +51,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     const jsonResponse = await handleUpload({
       body,
       request: req,
+      token: getBlobReadWriteToken(),
       onBeforeGenerateToken: async (pathname) => {
         console.log("[blob-upload-token] token issued for", pathname);
         return {

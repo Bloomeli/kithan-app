@@ -15,6 +15,7 @@
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { generateClientTokenFromReadWriteToken } from "@vercel/blob/client";
+import { getBlobReadWriteToken } from "./_blobEnv";
 
 export const config = {
   maxDuration: 30,
@@ -33,6 +34,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
 
   try {
     const clientToken = await generateClientTokenFromReadWriteToken({
+      token: getBlobReadWriteToken(),
       pathname,
       allowedContentTypes: ["image/*", "video/*", "application/pdf"],
       maximumSizeInBytes: 500 * 1024 * 1024,
