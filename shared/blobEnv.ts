@@ -9,9 +9,12 @@
  * kollidiert. Der alte Store bleibt unverändert bestehen, wird aber von
  * unserem Code nicht mehr verwendet.
  *
- * Alle drei Blob-Aufrufstellen (Token-Erzeugung, FTPS-Transfer-Cleanup,
- * Debug-Route) müssen denselben Token explizit übergeben, statt sich auf
- * die implizite BLOB_READ_WRITE_TOKEN-Standardsuche der SDK zu verlassen.
+ * Bewusst AUSSERHALB von api/ platziert (statt api/_blobEnv.ts): eine mit
+ * Unterstrich beginnende Datei innerhalb von api/ wird von Vercel zwar nicht
+ * selbst zu einer Funktion, führte hier aber dazu, dass jede Funktion, die
+ * sie importierte, beim Aufruf mit FUNCTION_INVOCATION_FAILED abstürzte
+ * (Bundling-Problem). Ein Ordner außerhalb von api/ ist der von Vercel
+ * empfohlene, robuste Weg für gemeinsam genutzten Server-Code.
  */
 export function getBlobReadWriteToken(): string {
   const token = process.env.PUBLIC_BLOB_READ_WRITE_TOKEN?.trim();

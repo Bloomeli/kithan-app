@@ -15,7 +15,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { Client } from "basic-ftp";
 import { Readable } from "node:stream";
 import { del } from "@vercel/blob";
-import { getBlobReadWriteToken } from "./_blobEnv";
+import { getBlobReadWriteToken } from "../shared/blobEnv";
 
 export const config = {
   maxDuration: 60,

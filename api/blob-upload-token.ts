@@ -4,14 +4,14 @@
  * 4,5-MB-Limit von Vercel Serverless Functions laufen müssen.
  *
  * Benötigt PUBLIC_BLOB_READ_WRITE_TOKEN als Vercel-Umgebungsvariable (siehe
- * api/_blobEnv.ts — der ursprüngliche, mit dem Projekt verbundene Store war
+ * shared/blobEnv.ts — der ursprüngliche, mit dem Projekt verbundene Store war
  * als "privat" angelegt, was sich bei Vercel Blob nicht nachträglich ändern
  * lässt; deshalb ein neuer, öffentlicher Store mit eigenem Prefix).
  */
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
-import { getBlobReadWriteToken } from "./_blobEnv";
+import { getBlobReadWriteToken } from "../shared/blobEnv";
 
 export const config = {
   maxDuration: 30,

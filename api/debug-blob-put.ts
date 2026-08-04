@@ -15,7 +15,7 @@
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { generateClientTokenFromReadWriteToken } from "@vercel/blob/client";
-import { getBlobReadWriteToken } from "./_blobEnv";
+import { getBlobReadWriteToken } from "../shared/blobEnv";
 
 export const config = {
   maxDuration: 30,
