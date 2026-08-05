@@ -10,6 +10,14 @@ export class SignaturePad {
   /** Last synced CSS pixel size of the canvas element. */
   private cssWidth = 0;
   private cssHeight = 0;
+  /**
+   * Set by loadFromDataURL() while the restored image is still decoding
+   * asynchronously. toDataURL() falls back to this exact string in the
+   * meantime so a persist-on-change triggered by an unrelated field (e.g.
+   * the Datum input) in that brief window can never read back a still-blank
+   * canvas and overwrite a just-restored signature with nothing.
+   */
+  private pendingRestoreDataUrl: string | null = null;
   private readonly onPointerDown: (event: PointerEvent) => void;
   private readonly onPointerMove: (event: PointerEvent) => void;
   private readonly onPointerUp: (event: PointerEvent) => void;
@@ -53,6 +61,7 @@ export class SignaturePad {
 
   clear(): void {
     this.strokes = 0;
+    this.pendingRestoreDataUrl = null;
     // Bust the cached CSS size so resize() always rebuilds the backing store
     // and re-applies devicePixelRatio scaling (identity transform after a plain
     // clearRect was the cause of the post-Löschen coordinate jump).
@@ -66,7 +75,29 @@ export class SignaturePad {
   }
 
   toDataURL(type = "image/png"): string {
+    if (this.pendingRestoreDataUrl && type === "image/png") {
+      return this.pendingRestoreDataUrl;
+    }
     return this.canvas.toDataURL(type);
+  }
+
+  /**
+   * Restores a previously saved signature (e.g. from a draft) onto the
+   * canvas. Marks the pad as non-empty immediately (isEmpty() must reflect
+   * the restored content right away, even before the async image decode
+   * finishes drawing the pixels).
+   */
+  loadFromDataURL(dataUrl: string): void {
+    this.strokes = 1;
+    this.pendingRestoreDataUrl = dataUrl;
+    const width = this.cssWidth;
+    const height = this.cssHeight;
+    const image = new Image();
+    image.onload = () => {
+      this.ctx.drawImage(image, 0, 0, width, height);
+      this.pendingRestoreDataUrl = null;
+    };
+    image.src = dataUrl;
   }
 
   private resize(): void {
@@ -132,6 +163,7 @@ export class SignaturePad {
     this.syncSizeIfNeeded();
     this.canvas.setPointerCapture(event.pointerId);
     this.drawing = true;
+    this.pendingRestoreDataUrl = null;
     const pos = this.pointerPosition(event);
     this.lastX = pos.x;
     this.lastY = pos.y;

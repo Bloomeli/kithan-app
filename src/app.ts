@@ -438,6 +438,23 @@ interface ClosingDraft {
   keysExtra: KeyHandoverExtraLine[];
 }
 
+/**
+ * Unterschriften-Bereich (Datum, Namen in Druckbuchstaben, Unterschrift-PNGs,
+ * Zeuge) — muss im Entwurf gespeichert werden, da der Mieter beim erneuten
+ * Öffnen eines Entwurfs (z.B. nach Zwischenspeichern) möglicherweise nicht
+ * mehr vor Ort ist, um erneut zu unterschreiben.
+ */
+interface SignaturesDraft {
+  signatureDatum: string;
+  vermieterDruckbuchstaben: string;
+  vermieterSignaturePng: string | null;
+  mieterDruckbuchstaben: string;
+  mieterSignaturePng: string | null;
+  zeugeName: string;
+  zeugeAnschrift: string;
+  zeugeSignaturePng: string | null;
+}
+
 interface FormDraft {
   kopfdaten: KopfdatenDraft;
   rooms: Record<string, RoomDraft>;
@@ -447,6 +464,7 @@ interface FormDraft {
   weitereRaeume: WeitereRaumEntry[] | null;
   schluessel: SchluesselDraft | null;
   closing: ClosingDraft | null;
+  signatures: SignaturesDraft | null;
 }
 
 function formDraftKey(objektart: Objektart, protokollart: Protokollart): string {
@@ -581,6 +599,22 @@ function normalizeClosingDraft(raw: Partial<ClosingDraft> | null | undefined): C
   };
 }
 
+function normalizeSignaturesDraft(raw: Partial<SignaturesDraft> | null | undefined): SignaturesDraft | null {
+  if (!raw) {
+    return null;
+  }
+  return {
+    signatureDatum: raw.signatureDatum ?? "",
+    vermieterDruckbuchstaben: raw.vermieterDruckbuchstaben ?? "",
+    vermieterSignaturePng: raw.vermieterSignaturePng ?? null,
+    mieterDruckbuchstaben: raw.mieterDruckbuchstaben ?? "",
+    mieterSignaturePng: raw.mieterSignaturePng ?? null,
+    zeugeName: raw.zeugeName ?? "",
+    zeugeAnschrift: raw.zeugeAnschrift ?? "",
+    zeugeSignaturePng: raw.zeugeSignaturePng ?? null,
+  };
+}
+
 function emptyFormDraft(): FormDraft {
   return {
     kopfdaten: emptyKopfdaten(),
@@ -591,6 +625,7 @@ function emptyFormDraft(): FormDraft {
     weitereRaeume: null,
     schluessel: null,
     closing: null,
+    signatures: null,
   };
 }
 
@@ -642,6 +677,7 @@ function loadFormDraft(objektart: Objektart, protokollart: Protokollart): FormDr
       weitereRaeume: parsed.weitereRaeume ?? null,
       schluessel: normalizeSchluesselDraft(parsed.schluessel),
       closing: normalizeClosingDraft(parsed.closing),
+      signatures: normalizeSignaturesDraft(parsed.signatures),
     };
   } catch {
     return emptyFormDraft();
@@ -873,6 +909,11 @@ function syncCurrentFormToSessionDraft(): FormDraft | null {
       persistMeters();
     }
   }
+  // Sicherheitsnetz: Unterschriften/Datum/Druckbuchstaben werden zwar schon
+  // bei jeder einzelnen Änderung gespeichert (siehe renderSignatureSection),
+  // hier zusätzlich absichern, damit "Als Entwurf speichern"/"Abschließen"
+  // garantiert den zuletzt gezeichneten Stand erfassen.
+  persistSignaturesFromState();
 
   return loadFormDraft(context.objektart, context.protokollart);
 }
@@ -2736,6 +2777,27 @@ function currentZeugeSignaturePng(): string | null {
     : null;
 }
 
+/**
+ * Persists Datum, Druckbuchstaben-Namen und alle drei Unterschriften-PNGs
+ * (Vermieter/Mieter/Zeuge) sofort in den aktuellen Formular-Entwurf, damit
+ * beim erneuten Öffnen eines Entwurfs alle Abschlussdaten exakt wieder
+ * erscheinen — der Mieter ist beim erneuten Öffnen ggf. nicht mehr vor Ort.
+ */
+function persistSignaturesFromState(): void {
+  updateCurrentFormDraft((draft) => {
+    draft.signatures = {
+      signatureDatum,
+      vermieterDruckbuchstaben,
+      vermieterSignaturePng: currentVermieterSignaturePng(),
+      mieterDruckbuchstaben,
+      mieterSignaturePng: currentMieterSignaturePng(),
+      zeugeName,
+      zeugeAnschrift,
+      zeugeSignaturePng: currentZeugeSignaturePng(),
+    };
+  });
+}
+
 function buildProtocolPdfInput(
   objektart: "gewerbe" | "privat" | "garage",
   protokollart: Protokollart,
@@ -3281,6 +3343,19 @@ function renderSignatureSection(
 ): void {
   resetSignatureUiState();
 
+  // Datum, Druckbuchstaben-Namen, Zeuge und Unterschriften aus dem Entwurf
+  // wiederherstellen (statt sie leer zu lassen) — sonst gehen diese Angaben
+  // beim Schließen und erneuten Öffnen eines Entwurfs verloren.
+  const context = getCurrentFormContext();
+  const saved = context ? loadFormDraft(context.objektart, context.protokollart).signatures : null;
+  if (saved) {
+    signatureDatum = saved.signatureDatum;
+    vermieterDruckbuchstaben = saved.vermieterDruckbuchstaben;
+    mieterDruckbuchstaben = saved.mieterDruckbuchstaben;
+    zeugeName = saved.zeugeName;
+    zeugeAnschrift = saved.zeugeAnschrift;
+  }
+
   const heading = document.createElement("h3");
   heading.className = "section-title";
   heading.textContent = "Unterschriften";
@@ -3297,6 +3372,7 @@ function renderSignatureSection(
   datumInput.value = signatureDatum;
   const updateDatum = (): void => {
     signatureDatum = datumInput.value;
+    persistSignaturesFromState();
   };
   datumInput.addEventListener("change", updateDatum);
   datumInput.addEventListener("input", updateDatum);
@@ -3310,6 +3386,7 @@ function renderSignatureSection(
     "text",
     (value) => {
       vermieterDruckbuchstaben = value;
+      persistSignaturesFromState();
     },
     "Name des Vermieters"
   );
@@ -3320,8 +3397,15 @@ function renderSignatureSection(
   );
   container.appendChild(vermieter.block);
   vermieterSignaturePad = new SignaturePad(vermieter.canvas);
+  if (saved?.vermieterSignaturePng) {
+    vermieterSignaturePad.loadFromDataURL(saved.vermieterSignaturePng);
+  }
+  const persistAfterVermieterStroke = (): void => persistSignaturesFromState();
+  vermieter.canvas.addEventListener("pointerup", persistAfterVermieterStroke);
+  vermieter.canvas.addEventListener("pointercancel", persistAfterVermieterStroke);
   vermieter.clearButton.addEventListener("click", () => {
     vermieterSignaturePad?.clear();
+    persistSignaturesFromState();
   });
 
   const mieterDruck = createTextField(
@@ -3331,14 +3415,22 @@ function renderSignatureSection(
     "text",
     (value) => {
       mieterDruckbuchstaben = value;
+      persistSignaturesFromState();
     },
     "Name des Mieters"
   );
   const mieter = createSignaturePadBlock("Mieter", `${idPrefix}-signature-mieter`, mieterDruck);
   container.appendChild(mieter.block);
   mieterSignaturePad = new SignaturePad(mieter.canvas);
+  if (saved?.mieterSignaturePng) {
+    mieterSignaturePad.loadFromDataURL(saved.mieterSignaturePng);
+  }
+  const persistAfterMieterStroke = (): void => persistSignaturesFromState();
+  mieter.canvas.addEventListener("pointerup", persistAfterMieterStroke);
+  mieter.canvas.addEventListener("pointercancel", persistAfterMieterStroke);
   mieter.clearButton.addEventListener("click", () => {
     mieterSignaturePad?.clear();
+    persistSignaturesFromState();
   });
 
   const zeugenBlock = document.createElement("div");
@@ -3356,6 +3448,7 @@ function renderSignatureSection(
       "text",
       (value) => {
         zeugeName = value;
+        persistSignaturesFromState();
       },
       "Name des Zeugen"
     )
@@ -3373,6 +3466,7 @@ function renderSignatureSection(
   anschriftInput.value = zeugeAnschrift;
   anschriftInput.addEventListener("input", () => {
     zeugeAnschrift = anschriftInput.value;
+    persistSignaturesFromState();
   });
   anschriftGroup.append(anschriftLabel, anschriftInput);
   zeugenBlock.appendChild(anschriftGroup);
@@ -3380,8 +3474,15 @@ function renderSignatureSection(
   const zeuge = createSignaturePadBlock("Unterschrift", `${idPrefix}-signature-zeuge`);
   zeugenBlock.appendChild(zeuge.block);
   zeugeSignaturePad = new SignaturePad(zeuge.canvas);
+  if (saved?.zeugeSignaturePng) {
+    zeugeSignaturePad.loadFromDataURL(saved.zeugeSignaturePng);
+  }
+  const persistAfterZeugeStroke = (): void => persistSignaturesFromState();
+  zeuge.canvas.addEventListener("pointerup", persistAfterZeugeStroke);
+  zeuge.canvas.addEventListener("pointercancel", persistAfterZeugeStroke);
   zeuge.clearButton.addEventListener("click", () => {
     zeugeSignaturePad?.clear();
+    persistSignaturesFromState();
   });
 
   container.appendChild(zeugenBlock);

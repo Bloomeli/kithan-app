@@ -308,7 +308,17 @@ export function generateAndDownloadProtocolPdf(input: ProtocolPdfInput): Protoco
   const dataUri = doc.output("datauristring") as string;
   const comma = dataUri.indexOf(",");
   const base64 = comma >= 0 ? dataUri.slice(comma + 1) : dataUri;
-  doc.save(filename);
+  // Deliberately NOT calling doc.save(filename) here: on an iOS/iPadOS
+  // "Zum Home-Bildschirm"-PWA (standalone display mode, no browser tabs),
+  // jsPDF's save() opens the generated PDF in Safari's built-in full-screen
+  // PDF viewer INSIDE the single app WebView — effectively replacing/
+  // suspending the running app page. Since finishProtocolAsPdf() immediately
+  // continues with the network upload (Blob token request + FTPS transfer)
+  // right after this function returns, that suspension was cutting the
+  // upload off mid-request (observed as a misleading "access control
+  // checks"/CORS error on the token fetch). The PDF only needs to exist as
+  // base64 in memory here — for the FTPS upload and the tenant email
+  // attachment, both of which use the return value below, not a local file.
   return { filename, base64 };
 }
 
