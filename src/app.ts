@@ -16,6 +16,7 @@ import {
 } from "./generateProtocolPdf";
 import { sendProtocolEmail } from "./sendProtocolEmail";
 import { uploadProtocolArchive, type ProtocolArchiveUploadResult } from "./protocolArchiveUpload";
+import { acquireUploadWakeLock, releaseUploadWakeLock } from "./wakeLock";
 
 type Objektart = "schluessel" | "gewerbe" | "privat" | "garage";
 type Protokollart = "uebergabe" | "ruecknahme";
@@ -932,6 +933,42 @@ function showConfirmDialog(options: {
 
     actions.appendChild(cancelButton);
     actions.appendChild(confirmButton);
+    box.appendChild(actions);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+  });
+}
+
+/**
+ * Blocking "OK only" alert dialog (custom-styled) — used for hard validation
+ * errors where there is no "proceed anyway" option, unlike showConfirmDialog.
+ */
+function showAlertDialog(message: string, okLabel = "Zurück zum Formular"): Promise<void> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "confirm-dialog-overlay";
+
+    const box = document.createElement("div");
+    box.className = "confirm-dialog-box";
+
+    const messageEl = document.createElement("p");
+    messageEl.className = "confirm-dialog-message";
+    messageEl.textContent = message;
+    box.appendChild(messageEl);
+
+    const actions = document.createElement("div");
+    actions.className = "confirm-dialog-actions";
+
+    const okButton = document.createElement("button");
+    okButton.type = "button";
+    okButton.className = "main-btn confirm-dialog-cancel";
+    okButton.textContent = okLabel;
+    okButton.addEventListener("click", () => {
+      overlay.remove();
+      resolve();
+    });
+
+    actions.appendChild(okButton);
     box.appendChild(actions);
     overlay.appendChild(box);
     document.body.appendChild(overlay);
@@ -2998,6 +3035,98 @@ async function finishProtocolAsPdf(): Promise<void> {
     return;
   }
 
+  // Harte Pflichtfeld-Prüfung: Datum, Vermieter, Mietername, Wohnung/Einheit sowie
+  // beide Unterschriften (Name in Druckbuchstaben + Unterschrift) und das Unterschriften-
+  // Datum MÜSSEN ausgefüllt sein — kein "trotzdem abschließen" möglich, im Gegensatz zur
+  // Wohnungsnummer/Lage-Prüfung weiter unten.
+  const missingFields: { label: string; focus: () => void }[] = [];
+
+  if (form.kopfdaten.besichtigungsdatum.trim() === "") {
+    missingFields.push({
+      label: "Datum",
+      focus: () => requireElement<HTMLInputElement>("besichtigungsdatum").focus(),
+    });
+  }
+  if (form.kopfdaten.vermieter.trim() === "") {
+    missingFields.push({
+      label: "Vermieter",
+      focus: () => requireElement<HTMLSelectElement>("vermieter-auswahl").focus(),
+    });
+  }
+  if (form.kopfdaten.mietername.trim() === "") {
+    missingFields.push({
+      label: "Name der/des Mieter(s)",
+      focus: () => requireElement<HTMLInputElement>("mietername").focus(),
+    });
+  }
+  if (form.kopfdaten.gebaeudeAuswahl.trim() === "") {
+    missingFields.push({
+      label: "Wohnung/Einheit",
+      focus: () => requireElement<HTMLSelectElement>("gebaeude-auswahl").focus(),
+    });
+  }
+  if (signatureDatum.trim() === "") {
+    missingFields.push({
+      label: "Datum (bei den Unterschriften)",
+      focus: () => {
+        const el = document.getElementById("standard-signature-datum");
+        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+        (el as HTMLInputElement | null)?.focus();
+      },
+    });
+  }
+  if (vermieterDruckbuchstaben.trim() === "") {
+    missingFields.push({
+      label: "Name in Druckbuchstaben (Vermieter)",
+      focus: () => {
+        const el = document.getElementById("standard-vermieter-druckbuchstaben");
+        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+        (el as HTMLInputElement | null)?.focus();
+      },
+    });
+  }
+  if (!vermieterSignaturePad || vermieterSignaturePad.isEmpty()) {
+    missingFields.push({
+      label: "Unterschrift Vermieter",
+      focus: () => {
+        document
+          .getElementById("standard-signature-vermieter")
+          ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      },
+    });
+  }
+  if (mieterDruckbuchstaben.trim() === "") {
+    missingFields.push({
+      label: "Name in Druckbuchstaben (Mieter)",
+      focus: () => {
+        const el = document.getElementById("standard-mieter-druckbuchstaben");
+        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+        (el as HTMLInputElement | null)?.focus();
+      },
+    });
+  }
+  if (!mieterSignaturePad || mieterSignaturePad.isEmpty()) {
+    missingFields.push({
+      label: "Unterschrift Mieter",
+      focus: () => {
+        document
+          .getElementById("standard-signature-mieter")
+          ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      },
+    });
+  }
+
+  if (missingFields.length > 0) {
+    await showAlertDialog(
+      `Folgende Pflichtangaben fehlen noch und müssen ausgefüllt werden, bevor das Protokoll abgeschlossen werden kann:\n\n${missingFields
+        .map((field) => `• ${field.label}`)
+        .join("\n")}`,
+      "Zurück zum Formular"
+    );
+    missingFields[0].focus();
+    return;
+  }
+
   // Wohnungsnummer/Lage ist nur bei Privat/Gewerbe verpflichtend (Garage hat keine
   // Wohnungen) — fehlt sie dort, warnen wir deutlich, blockieren den Abschluss aber nicht hart.
   if (context.objektart !== "garage" && form.kopfdaten.wohnungsnummerLage.trim() === "") {
@@ -3063,16 +3192,29 @@ async function finishProtocolAsPdf(): Promise<void> {
   const sessionKey = formDraftKey(context.objektart, context.protokollart);
   let archiveResult: ProtocolArchiveUploadResult | null = null;
   if (mieterPdfOk && completionMieterPdf) {
+    // Verhindert, dass der Bildschirm während der (potenziell mehrminütigen,
+    // nacheinander laufenden) Foto-/Video-/PDF-Übertragung automatisch sperrt.
+    // Ein Bildschirm-Sperren mitten im Upload kann iOS dazu bringen, die
+    // Netzwerkverbindung zu unterbrechen — meist trifft das gerade die zuletzt
+    // gestartete Übertragung (das PDF), während bereits abgeschlossene
+    // Foto-/Video-Uploads unberührt bleiben. Siehe src/wakeLock.ts.
+    await acquireUploadWakeLock();
+    const uploadStartedAt = Date.now();
     try {
       archiveResult = await uploadProtocolArchive({
         sessionKey,
         pdfFilename: completionMieterPdf.filename,
         pdfBase64: completionMieterPdf.base64,
       });
-      console.log("[finishProtocolAsPdf] uploadProtocolArchive result:", archiveResult);
+      console.log(
+        `[finishProtocolAsPdf] uploadProtocolArchive result (nach ${Math.round((Date.now() - uploadStartedAt) / 1000)}s):`,
+        archiveResult
+      );
     } catch (error) {
       console.error("[finishProtocolAsPdf] uploadProtocolArchive threw unexpectedly:", error);
       archiveResult = null;
+    } finally {
+      await releaseUploadWakeLock();
     }
   } else {
     console.warn(

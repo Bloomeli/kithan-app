@@ -71,9 +71,15 @@ export async function uploadProtocolArchive(
     return result;
   }
 
+  const archiveStartedAt = Date.now();
+  const elapsedSec = (): number => Math.round((Date.now() - archiveStartedAt) / 1000);
+
   const records = await getMediaForSession(input.sessionKey);
   const photos = records.filter((r) => r.kind === "photo");
   const videos = records.filter((r) => r.kind === "video");
+  console.log(
+    `[protocol-archive] start: ${photos.length} Foto(s), ${videos.length} Video(s) zu prüfen, danach PDF.`
+  );
 
   // Fotos/Videos wurden bereits direkt nach der Aufnahme einzeln hochgeladen
   // (siehe cardMedia.ts). Ein bereits erfolgreich übertragenes Medium hier
@@ -121,11 +127,28 @@ export async function uploadProtocolArchive(
     }
   }
 
+  // Diagnose-Hinweis: Läuft dieser Log-Eintrag erst nach mehreren Minuten
+  // (siehe elapsedSinceStart), ist die wahrscheinlichste Ursache eines
+  // anschließenden PDF-Fehlschlags ein zwischenzeitlich gesperrter Bildschirm
+  // / in den Hintergrund gewechselter Tab (iOS unterbricht dann die
+  // Netzwerkverbindung) — NICHT ein Problem mit dem PDF selbst. Ein
+  // Screen-Wake-Lock während dieser Phase (siehe finishProtocolAsPdf in
+  // app.ts) soll genau das verhindern.
+  console.log(
+    `[protocol-archive] Fotos/Videos fertig nach ${elapsedSec()}s (Fotos: ${result.photoUploaded} ok / ${result.photoFailed} fehlgeschlagen, Videos: ${result.videoUploaded} ok / ${result.videoFailed} fehlgeschlagen) — starte PDF-Upload …`
+  );
+  const pdfStartedAt = Date.now();
   try {
     result.pdfUploaded = await uploadPdfToServer(input.pdfFilename, input.pdfBase64);
+    console.log(
+      `[protocol-archive] PDF-Upload erfolgreich nach ${Math.round((Date.now() - pdfStartedAt) / 1000)}s (Gesamtdauer seit Start: ${elapsedSec()}s).`
+    );
   } catch (error) {
     result.pdfUploaded = false;
     console.error("[protocol-archive] PDF (Protokoll) upload failed — this is a SEPARATE request/endpoint from the photo/video uploads above", {
+      elapsedSinceArchiveStartSec: elapsedSec(),
+      elapsedSincePdfStartSec: Math.round((Date.now() - pdfStartedAt) / 1000),
+      documentVisibility: typeof document !== "undefined" ? document.visibilityState : "n/a",
       errorName: error instanceof Error ? error.name : typeof error,
       errorMessage: error instanceof Error ? error.message : String(error),
       errorStack: error instanceof Error ? error.stack : undefined,
