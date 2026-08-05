@@ -365,6 +365,13 @@ const STORAGE_KEYS = {
 } as const;
 
 const FORM_DRAFT_PREFIX = "kithan_form_";
+// Vorgangs-ID (technische, eindeutige ID pro Vorgang) — Schritt 3 des
+// Ordnungs-/Ablage-Konzepts. Getrennt vom Formular-Entwurf (FORM_DRAFT_PREFIX)
+// gehalten, damit die bestehende Entwurfs-Speicherung/-Wiederherstellung
+// unangetastet bleibt; dient aktuell als Schlüssel für die IndexedDB-Medien
+// (Fotos/Videos) statt des bisherigen, nur pro Objektart+Protokollart
+// eindeutigen sessionKey.
+const VORGANG_ID_PREFIX = "kithan_vorgang_id_";
 const MAX_NAMED_DRAFTS = 20;
 
 interface RoomDraft {
@@ -469,6 +476,36 @@ interface FormDraft {
 
 function formDraftKey(objektart: Objektart, protokollart: Protokollart): string {
   return `${FORM_DRAFT_PREFIX}${objektart}_${protokollart}`;
+}
+
+function vorgangIdKey(objektart: Objektart, protokollart: Protokollart): string {
+  return `${VORGANG_ID_PREFIX}${objektart}_${protokollart}`;
+}
+
+/**
+ * Liefert die technische Vorgangs-ID für den aktuellen Objektart+Protokollart-
+ * "Slot" und erzeugt bei Bedarf eine neue. Wird als Schlüssel für die
+ * IndexedDB-Medien (Fotos/Videos) verwendet (siehe getMediaSessionKey).
+ *
+ * Rückwärtskompatibilität: Existiert für diesen Slot bereits ein (vor dieser
+ * Änderung angelegter) Formular-Entwurf, aber noch keine Vorgangs-ID, wird der
+ * bisherige, deterministische Formular-Schlüssel als Vorgangs-ID
+ * übernommen — so bleiben bereits aufgenommene Fotos/Videos eines laufenden
+ * Vorgangs unter ihrem bisherigen Schlüssel auffindbar (kein Datenverlust).
+ * Ein wirklich neuer Vorgang (noch kein gespeicherter Entwurf) bekommt sofort
+ * eine frische, eindeutige ID.
+ */
+function getOrCreateVorgangId(objektart: Objektart, protokollart: Protokollart): string {
+  const key = vorgangIdKey(objektart, protokollart);
+  const existing = localStorage.getItem(key);
+  if (existing) {
+    return existing;
+  }
+  const legacyFormDraftKey = formDraftKey(objektart, protokollart);
+  const hasExistingDraft = localStorage.getItem(legacyFormDraftKey) !== null;
+  const vorgangId = hasExistingDraft ? legacyFormDraftKey : generateId("vorgang");
+  localStorage.setItem(key, vorgangId);
+  return vorgangId;
 }
 
 function emptyKopfdaten(): KopfdatenDraft {
@@ -712,15 +749,24 @@ function persistClosing(): void {
 
 function clearAllFormDrafts(): void {
   const keysToRemove: string[] = [];
+  const vorgangKeysToRemove: string[] = [];
   for (let i = 0; i < localStorage.length; i += 1) {
     const key = localStorage.key(i);
     if (key && key.startsWith(FORM_DRAFT_PREFIX)) {
       keysToRemove.push(key);
+    } else if (key && key.startsWith(VORGANG_ID_PREFIX)) {
+      vorgangKeysToRemove.push(key);
     }
   }
   keysToRemove.forEach((key) => {
     localStorage.removeItem(key);
-    void deleteMediaForSession(key).catch((error) => console.error(error));
+  });
+  vorgangKeysToRemove.forEach((key) => {
+    const vorgangId = localStorage.getItem(key);
+    localStorage.removeItem(key);
+    if (vorgangId) {
+      void deleteMediaForSession(vorgangId).catch((error) => console.error(error));
+    }
   });
 }
 
@@ -729,7 +775,7 @@ function getMediaSessionKey(): string | null {
   if (!context) {
     return null;
   }
-  return formDraftKey(context.objektart, context.protokollart);
+  return getOrCreateVorgangId(context.objektart, context.protokollart);
 }
 
 async function removeOwnerMedia(ownerKey: string): Promise<void> {
@@ -3260,7 +3306,10 @@ async function finishProtocolAsPdf(): Promise<void> {
     mieterPdfOk = false;
   }
 
-  const sessionKey = formDraftKey(context.objektart, context.protokollart);
+  // Muss exakt der Schlüssel sein, unter dem die Fotos/Videos beim Aufnehmen
+  // gespeichert wurden (siehe getMediaSessionKey) — sonst findet der Archiv-
+  // Upload keine Medien.
+  const sessionKey = getOrCreateVorgangId(context.objektart, context.protokollart);
   let archiveResult: ProtocolArchiveUploadResult | null = null;
   if (mieterPdfOk && completionMieterPdf) {
     // Verhindert, dass der Bildschirm während der (potenziell mehrminütigen,
@@ -3302,9 +3351,16 @@ function clearCurrentSessionDraft(): void {
   if (!context) {
     return;
   }
-  const sessionKey = formDraftKey(context.objektart, context.protokollart);
-  localStorage.removeItem(sessionKey);
-  void deleteMediaForSession(sessionKey).catch((error) => console.error(error));
+  localStorage.removeItem(formDraftKey(context.objektart, context.protokollart));
+  // Vorgangs-ID mitsamt ihren Medien (Fotos/Videos) löschen, damit der
+  // nächste Vorgang mit demselben Objektart+Protokollart eine frische,
+  // eindeutige ID erhält statt versehentlich Medien wiederzuverwenden.
+  const vorgangKey = vorgangIdKey(context.objektart, context.protokollart);
+  const vorgangId = localStorage.getItem(vorgangKey);
+  localStorage.removeItem(vorgangKey);
+  if (vorgangId) {
+    void deleteMediaForSession(vorgangId).catch((error) => console.error(error));
+  }
 }
 
 function finishSchluesselAsPdf(): void {
