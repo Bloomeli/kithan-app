@@ -29,13 +29,36 @@ function remoteConfigured(): boolean {
 }
 
 async function uploadPdfToServer(filename: string, pdfBase64: string): Promise<boolean> {
+  console.log(`[protocol-archive] Starting PDF upload (filename=${filename}, base64Length=${pdfBase64.length})`);
+
   if (!pdfBase64) {
+    // Previously a SILENT early return (no log at all) — this is a likely
+    // culprit for "no upload log whatsoever, yet the protocol ends up marked
+    // as failed": if pdfBase64 is empty/undefined here, uploadViaBlobAndFtps
+    // is never even called, and nothing was logged to explain why.
+    console.error(
+      "[protocol-archive] PDF upload failed: pdfBase64 is empty — uploadViaBlobAndFtps will NOT be called."
+    );
     return false;
   }
 
-  const binary = Uint8Array.from(atob(pdfBase64), (c) => c.charCodeAt(0));
-  const blob = new Blob([binary], { type: "application/pdf" });
+  let blob: Blob;
+  try {
+    const binary = Uint8Array.from(atob(pdfBase64), (c) => c.charCodeAt(0));
+    blob = new Blob([binary], { type: "application/pdf" });
+  } catch (error) {
+    console.error("[protocol-archive] PDF upload failed: could not decode pdfBase64 into a Blob", {
+      base64Length: pdfBase64.length,
+      errorName: error instanceof Error ? error.name : typeof error,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      rawError: error,
+    });
+    return false;
+  }
 
+  console.log(
+    `[protocol-archive] Calling uploadViaBlobAndFtps for PDF (blobBytes=${blob.size})`
+  );
   const result = await uploadViaBlobAndFtps({
     kind: "pdf",
     ownerKey: "protokoll",
@@ -46,8 +69,12 @@ async function uploadPdfToServer(filename: string, pdfBase64: string): Promise<b
   });
 
   if (!result.ok) {
+    console.error("[protocol-archive] PDF upload failed: uploadViaBlobAndFtps returned ok=false", {
+      error: result.error,
+    });
     throw new Error(result.error || "PDF-Übertragung fehlgeschlagen.");
   }
+  console.log(`[protocol-archive] PDF upload finished successfully (remotePath=${result.remotePath})`);
   return true;
 }
 

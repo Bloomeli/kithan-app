@@ -3171,11 +3171,15 @@ async function finishProtocolAsPdf(): Promise<void> {
   top.scrollIntoView({ behavior: "smooth", block: "start" });
 
   let mieterPdfOk = false;
+  console.log("[finishProtocolAsPdf] PDF generation started");
   try {
     completionMieterPdf = generateAndDownloadProtocolPdf(
       buildProtocolPdfInput(context.objektart, context.protokollart, form)
     );
     mieterPdfOk = true;
+    console.log(
+      `[finishProtocolAsPdf] PDF generated successfully (filename=${completionMieterPdf.filename}, base64Length=${completionMieterPdf.base64.length})`
+    );
   } catch (error) {
     // This happens BEFORE any network request — if this throws, the archive
     // upload below is skipped entirely (no Blob/FTPS call at all). renderCompletionTop
@@ -3183,7 +3187,12 @@ async function finishProtocolAsPdf(): Promise<void> {
     // (mieterPdfOk=false), not the generic upload-failure message.
     console.error(
       "[finishProtocolAsPdf] PDF generation FAILED — archive upload will be skipped entirely (no network request will be made):",
-      error
+      {
+        errorName: error instanceof Error ? error.name : typeof error,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        errorStack: error instanceof Error ? error.stack : undefined,
+        rawError: error,
+      }
     );
     completionMieterPdf = null;
     mieterPdfOk = false;
