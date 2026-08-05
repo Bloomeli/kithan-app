@@ -3783,12 +3783,20 @@ function showFormular(objektart: Objektart, protokollart: Protokollart): void {
   if (objektart === "schluessel") {
     formStandard.classList.add("hidden");
     formSchluessel.classList.remove("hidden");
+    // showOnly() BEFORE building the signature section: renderSignatureSection()
+    // constructs signature <canvas> elements and restores saved signature
+    // images onto them — while the view container is still hidden (display:
+    // none), getBoundingClientRect() reads 0x0, which corrupts the canvas'
+    // internal size bookkeeping and can wipe/blur a restored signature.
+    // Nothing here depends on the view being hidden during construction
+    // (everything below runs synchronously — the browser never paints the
+    // "half-built" intermediate state either way).
+    showOnly(viewFormular);
     restoreSchluessel(draft);
     if (!draft.schluessel) {
       persistSchluesselFromDom();
     }
     renderSignatureSection(schluesselSignatureContainer, "schluessel", finishSchluesselAsPdf);
-    showOnly(viewFormular);
     return;
   }
 
@@ -3796,6 +3804,9 @@ function showFormular(objektart: Objektart, protokollart: Protokollart): void {
   formStandard.classList.remove("hidden");
   document.getElementById("protocol-completion-top")?.remove();
   setProtocolFormBodyHidden(false);
+  // See comment above the schluessel branch — showOnly() must run before any
+  // signature <canvas> is constructed/restored.
+  showOnly(viewFormular);
   applyFormLabels(objektart, protokollart);
   restoreKopfdaten(draft);
   renderRooms(objektart);
@@ -3805,7 +3816,6 @@ function showFormular(objektart: Objektart, protokollart: Protokollart): void {
     finishLabel:
       protokollart === "uebergabe" ? "Übergabe abschließen" : "Rücknahme abschließen",
   });
-  showOnly(viewFormular);
 }
 
 function goToFormularView(protokollart: Protokollart): void {
