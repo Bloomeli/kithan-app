@@ -15,7 +15,7 @@ import {
   type SchluesselPdfInput,
 } from "./generateProtocolPdf";
 import { sendProtocolEmail } from "./sendProtocolEmail";
-import { uploadProtocolArchive } from "./protocolArchiveUpload";
+import { uploadProtocolArchive, type ProtocolArchiveUploadResult } from "./protocolArchiveUpload";
 
 type Objektart = "schluessel" | "gewerbe" | "privat" | "garage";
 type Protokollart = "uebergabe" | "ruecknahme";
@@ -60,39 +60,299 @@ const PROTOKOLLART_LABELS: Record<Protokollart, string> = {
   ruecknahme: "Rücknahme",
 };
 
+// Jedes Objekt behält sein bisheriges "label" (unverändert für Anzeige/PDF/Entwürfe),
+// ergänzt um einzelne Adressfelder (strasse/hausnummer/plz/ort/zusatz) für die
+// künftige strukturierte Vorgangs-Ordner-/Dateinamenbildung (siehe Implementierungsplan).
+// "zusatz" ist der bisherige Klammerzusatz im Label (z.B. "Lager", "Duplex", "Kita") oder "".
 const OBJEKTE = [
-  { id: "adalbertstrasse-104", label: "Adalbertstraße 104, 80798 München" },
-  { id: "adelheidstr-24", label: "Adelheidstr. 24, 80798 München" },
-  { id: "elisabethstrasse-8", label: "Elisabethstraße 8, 80739 München" },
-  { id: "goethestr-3", label: "Goethestr. 3, 80336 München" },
-  { id: "guntherstr-15", label: "Guntherstr. 15, 80639 München" },
-  { id: "herrnstrasse-44", label: "Herrnstraße 44, 80539 München" },
-  { id: "herzogstrasse-5", label: "Herzogstraße 5 (Lager), 80331 München" },
-  { id: "ismaninger-str-17-19", label: "Ismaninger Str. 17-19 (Duplex), 81675 München" },
-  { id: "maximiliansplatz-12a", label: "Maximiliansplatz 12a, 80333 München" },
-  { id: "steinstrasse-57", label: "Steinstraße 57, 81667 München" },
-  { id: "zenettistr-26", label: "Zenettistr. 26, 80337 München" },
-  { id: "koenigsstrasse-8", label: "Königsstraße 8 (Lager Dach), 93047 Regensburg" },
-  { id: "despagstrasse-4-4a", label: "Despagstraße 4-4a, 85055 Ingolstadt" },
-  { id: "spandauer-str-160b", label: "Spandauer Str. 160b, 14612 Falkensee" },
-  { id: "spandauer-str-160c", label: "Spandauer Str. 160c, 14612 Falkensee" },
-  { id: "berliner-str-35-55", label: "Berliner Str. 35-55, 14612 Falkensee" },
-  { id: "aberstr-23", label: "Aberstr. 23, 81679 München" },
-  { id: "delpstr-4", label: "Delpstr. 4 (BüroVilla), 81679 München" },
-  { id: "georgenstrasse-3", label: "Georgenstraße 3, 80799 München" },
-  { id: "georgenstrasse-3-rgb", label: "Georgenstraße 3 RGB, 80799 München" },
-  { id: "goethestrasse-8", label: "Goethestraße 8, 80336 München" },
-  { id: "seidlstrasse-8", label: "Seidlstraße 8, 80335 München" },
-  { id: "kaufinger-strasse-17", label: "Kaufinger Straße 17 (Einzelhandel), 80331 München" },
-  { id: "leopoldstrasse-41", label: "Leopoldstraße 41, 80802 München" },
-  { id: "nuernberger-str-24-26", label: "Nürnberger Str. 24-26 (Außenstellplätze), 91052 Erlangen" },
-  { id: "michael-vogel-str-1a", label: "Michael-Vogel-Str. 1a, 91052 Erlangen" },
-  { id: "michael-vogel-str-1b", label: "Michael-Vogel-Str. 1b, 91052 Erlangen" },
-  { id: "michael-vogel-str-1c", label: "Michael-Vogel-Str. 1c, 91052 Erlangen" },
-  { id: "michael-vogel-str-1d", label: "Michael-Vogel-Str. 1d, 91052 Erlangen" },
-  { id: "michael-vogel-str-1e", label: "Michael-Vogel-Str. 1e, 91052 Erlangen" },
-  { id: "auf-dem-streitacker-32-34", label: "Auf dem Streitacker 32-34 (Kita), 51149 Köln" },
-  { id: "hyazinthenweg-10-12", label: "Hyazinthenweg 10-12, 51069 Köln" },
+  {
+    id: "adalbertstrasse-104",
+    label: "Adalbertstraße 104, 80798 München",
+    strasse: "Adalbertstraße",
+    hausnummer: "104",
+    plz: "80798",
+    ort: "München",
+    zusatz: "",
+  },
+  {
+    id: "adelheidstr-24",
+    label: "Adelheidstr. 24, 80798 München",
+    strasse: "Adelheidstr.",
+    hausnummer: "24",
+    plz: "80798",
+    ort: "München",
+    zusatz: "",
+  },
+  {
+    id: "elisabethstrasse-8",
+    label: "Elisabethstraße 8, 80739 München",
+    strasse: "Elisabethstraße",
+    hausnummer: "8",
+    plz: "80739",
+    ort: "München",
+    zusatz: "",
+  },
+  {
+    id: "goethestr-3",
+    label: "Goethestr. 3, 80336 München",
+    strasse: "Goethestr.",
+    hausnummer: "3",
+    plz: "80336",
+    ort: "München",
+    zusatz: "",
+  },
+  {
+    id: "guntherstr-15",
+    label: "Guntherstr. 15, 80639 München",
+    strasse: "Guntherstr.",
+    hausnummer: "15",
+    plz: "80639",
+    ort: "München",
+    zusatz: "",
+  },
+  {
+    id: "herrnstrasse-44",
+    label: "Herrnstraße 44, 80539 München",
+    strasse: "Herrnstraße",
+    hausnummer: "44",
+    plz: "80539",
+    ort: "München",
+    zusatz: "",
+  },
+  {
+    id: "herzogstrasse-5",
+    label: "Herzogstraße 5 (Lager), 80331 München",
+    strasse: "Herzogstraße",
+    hausnummer: "5",
+    plz: "80331",
+    ort: "München",
+    zusatz: "Lager",
+  },
+  {
+    id: "ismaninger-str-17-19",
+    label: "Ismaninger Str. 17-19 (Duplex), 81675 München",
+    strasse: "Ismaninger Str.",
+    hausnummer: "17-19",
+    plz: "81675",
+    ort: "München",
+    zusatz: "Duplex",
+  },
+  {
+    id: "maximiliansplatz-12a",
+    label: "Maximiliansplatz 12a, 80333 München",
+    strasse: "Maximiliansplatz",
+    hausnummer: "12a",
+    plz: "80333",
+    ort: "München",
+    zusatz: "",
+  },
+  {
+    id: "steinstrasse-57",
+    label: "Steinstraße 57, 81667 München",
+    strasse: "Steinstraße",
+    hausnummer: "57",
+    plz: "81667",
+    ort: "München",
+    zusatz: "",
+  },
+  {
+    id: "zenettistr-26",
+    label: "Zenettistr. 26, 80337 München",
+    strasse: "Zenettistr.",
+    hausnummer: "26",
+    plz: "80337",
+    ort: "München",
+    zusatz: "",
+  },
+  {
+    id: "koenigsstrasse-8",
+    label: "Königsstraße 8 (Lager Dach), 93047 Regensburg",
+    strasse: "Königsstraße",
+    hausnummer: "8",
+    plz: "93047",
+    ort: "Regensburg",
+    zusatz: "Lager Dach",
+  },
+  {
+    id: "despagstrasse-4-4a",
+    label: "Despagstraße 4-4a, 85055 Ingolstadt",
+    strasse: "Despagstraße",
+    hausnummer: "4-4a",
+    plz: "85055",
+    ort: "Ingolstadt",
+    zusatz: "",
+  },
+  {
+    id: "spandauer-str-160b",
+    label: "Spandauer Str. 160b, 14612 Falkensee",
+    strasse: "Spandauer Str.",
+    hausnummer: "160b",
+    plz: "14612",
+    ort: "Falkensee",
+    zusatz: "",
+  },
+  {
+    id: "spandauer-str-160c",
+    label: "Spandauer Str. 160c, 14612 Falkensee",
+    strasse: "Spandauer Str.",
+    hausnummer: "160c",
+    plz: "14612",
+    ort: "Falkensee",
+    zusatz: "",
+  },
+  {
+    id: "berliner-str-35-55",
+    label: "Berliner Str. 35-55, 14612 Falkensee",
+    strasse: "Berliner Str.",
+    hausnummer: "35-55",
+    plz: "14612",
+    ort: "Falkensee",
+    zusatz: "",
+  },
+  {
+    id: "aberstr-23",
+    label: "Aberstr. 23, 81679 München",
+    strasse: "Aberstr.",
+    hausnummer: "23",
+    plz: "81679",
+    ort: "München",
+    zusatz: "",
+  },
+  {
+    id: "delpstr-4",
+    label: "Delpstr. 4 (BüroVilla), 81679 München",
+    strasse: "Delpstr.",
+    hausnummer: "4",
+    plz: "81679",
+    ort: "München",
+    zusatz: "BüroVilla",
+  },
+  {
+    id: "georgenstrasse-3",
+    label: "Georgenstraße 3, 80799 München",
+    strasse: "Georgenstraße",
+    hausnummer: "3",
+    plz: "80799",
+    ort: "München",
+    zusatz: "",
+  },
+  {
+    id: "georgenstrasse-3-rgb",
+    label: "Georgenstraße 3 RGB, 80799 München",
+    strasse: "Georgenstraße",
+    hausnummer: "3",
+    plz: "80799",
+    ort: "München",
+    zusatz: "RGB",
+  },
+  {
+    id: "goethestrasse-8",
+    label: "Goethestraße 8, 80336 München",
+    strasse: "Goethestraße",
+    hausnummer: "8",
+    plz: "80336",
+    ort: "München",
+    zusatz: "",
+  },
+  {
+    id: "seidlstrasse-8",
+    label: "Seidlstraße 8, 80335 München",
+    strasse: "Seidlstraße",
+    hausnummer: "8",
+    plz: "80335",
+    ort: "München",
+    zusatz: "",
+  },
+  {
+    id: "kaufinger-strasse-17",
+    label: "Kaufinger Straße 17 (Einzelhandel), 80331 München",
+    strasse: "Kaufinger Straße",
+    hausnummer: "17",
+    plz: "80331",
+    ort: "München",
+    zusatz: "Einzelhandel",
+  },
+  {
+    id: "leopoldstrasse-41",
+    label: "Leopoldstraße 41, 80802 München",
+    strasse: "Leopoldstraße",
+    hausnummer: "41",
+    plz: "80802",
+    ort: "München",
+    zusatz: "",
+  },
+  {
+    id: "nuernberger-str-24-26",
+    label: "Nürnberger Str. 24-26 (Außenstellplätze), 91052 Erlangen",
+    strasse: "Nürnberger Str.",
+    hausnummer: "24-26",
+    plz: "91052",
+    ort: "Erlangen",
+    zusatz: "Außenstellplätze",
+  },
+  {
+    id: "michael-vogel-str-1a",
+    label: "Michael-Vogel-Str. 1a, 91052 Erlangen",
+    strasse: "Michael-Vogel-Str.",
+    hausnummer: "1a",
+    plz: "91052",
+    ort: "Erlangen",
+    zusatz: "",
+  },
+  {
+    id: "michael-vogel-str-1b",
+    label: "Michael-Vogel-Str. 1b, 91052 Erlangen",
+    strasse: "Michael-Vogel-Str.",
+    hausnummer: "1b",
+    plz: "91052",
+    ort: "Erlangen",
+    zusatz: "",
+  },
+  {
+    id: "michael-vogel-str-1c",
+    label: "Michael-Vogel-Str. 1c, 91052 Erlangen",
+    strasse: "Michael-Vogel-Str.",
+    hausnummer: "1c",
+    plz: "91052",
+    ort: "Erlangen",
+    zusatz: "",
+  },
+  {
+    id: "michael-vogel-str-1d",
+    label: "Michael-Vogel-Str. 1d, 91052 Erlangen",
+    strasse: "Michael-Vogel-Str.",
+    hausnummer: "1d",
+    plz: "91052",
+    ort: "Erlangen",
+    zusatz: "",
+  },
+  {
+    id: "michael-vogel-str-1e",
+    label: "Michael-Vogel-Str. 1e, 91052 Erlangen",
+    strasse: "Michael-Vogel-Str.",
+    hausnummer: "1e",
+    plz: "91052",
+    ort: "Erlangen",
+    zusatz: "",
+  },
+  {
+    id: "auf-dem-streitacker-32-34",
+    label: "Auf dem Streitacker 32-34 (Kita), 51149 Köln",
+    strasse: "Auf dem Streitacker",
+    hausnummer: "32-34",
+    plz: "51149",
+    ort: "Köln",
+    zusatz: "Kita",
+  },
+  {
+    id: "hyazinthenweg-10-12",
+    label: "Hyazinthenweg 10-12, 51069 Köln",
+    strasse: "Hyazinthenweg",
+    hausnummer: "10-12",
+    plz: "51069",
+    ort: "Köln",
+    zusatz: "",
+  },
 ] as const;
 
 const DEFAULT_SUBTITLE = "Übergabe & Rücknahme Protokolle";
@@ -117,7 +377,8 @@ interface KopfdatenDraft {
   vermieter: string;
   mietername: string;
   gebaeudeAuswahl: string;
-  bemerkung: string;
+  /** Konkrete Wohnung/Einheit INNERHALB des unter gebaeudeAuswahl gewählten Gebäudes (z.B. "WHG 07", "EG links", "Büro 3"). Nur bei Privat/Gewerbe verpflichtend. */
+  wohnungsnummerLage: string;
   besichtigungsdatum: string;
   maengelStatus: "" | "keine" | "folgende";
 }
@@ -196,7 +457,7 @@ function emptyKopfdaten(): KopfdatenDraft {
     vermieter: "",
     mietername: "",
     gebaeudeAuswahl: "",
-    bemerkung: "",
+    wohnungsnummerLage: "",
     besichtigungsdatum: "",
     maengelStatus: "",
   };
@@ -362,8 +623,17 @@ function loadFormDraft(objektart: Objektart, protokollart: Protokollart): FormDr
   }
   try {
     const parsed = JSON.parse(raw) as Partial<FormDraft>;
+    // Legacy-Migration: das frühere freie "Bemerkung"-Feld in den Kopfdaten
+    // wurde in "Wohnungsnummer / Lage" umgewandelt (nie im PDF ausgegeben,
+    // daher unkritisch) — bereits gespeicherte Alt-Entwürfe übernehmen ihren
+    // bisherigen Bemerkungstext automatisch in das neue Pflichtfeld.
+    const rawKopfdaten = (parsed.kopfdaten ?? {}) as Partial<KopfdatenDraft> & { bemerkung?: string };
     return {
-      kopfdaten: { ...emptyKopfdaten(), ...(parsed.kopfdaten ?? {}) },
+      kopfdaten: {
+        ...emptyKopfdaten(),
+        ...rawKopfdaten,
+        wohnungsnummerLage: rawKopfdaten.wohnungsnummerLage ?? rawKopfdaten.bemerkung ?? "",
+      },
       rooms: normalizeRoomsMap(parsed.rooms ?? {}),
       meters: parsed.meters ?? null,
       garageRooms: parsed.garageRooms ?? null,
@@ -616,6 +886,56 @@ function hideDraftStatus(): void {
   draftStatus.classList.add("hidden");
   draftStatus.textContent = "";
   draftStatus.classList.remove("is-error");
+}
+
+/**
+ * Simple blocking confirm dialog (custom-styled, since native confirm() can't
+ * have custom button labels). Resolves true when the user picks confirmLabel,
+ * false when the user picks cancelLabel.
+ */
+function showConfirmDialog(options: {
+  message: string;
+  confirmLabel: string;
+  cancelLabel: string;
+}): Promise<boolean> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "confirm-dialog-overlay";
+
+    const box = document.createElement("div");
+    box.className = "confirm-dialog-box";
+
+    const message = document.createElement("p");
+    message.className = "confirm-dialog-message";
+    message.textContent = options.message;
+    box.appendChild(message);
+
+    const actions = document.createElement("div");
+    actions.className = "confirm-dialog-actions";
+
+    const close = (result: boolean): void => {
+      overlay.remove();
+      resolve(result);
+    };
+
+    const cancelButton = document.createElement("button");
+    cancelButton.type = "button";
+    cancelButton.className = "main-btn confirm-dialog-cancel";
+    cancelButton.textContent = options.cancelLabel;
+    cancelButton.addEventListener("click", () => close(false));
+
+    const confirmButton = document.createElement("button");
+    confirmButton.type = "button";
+    confirmButton.className = "main-btn confirm-dialog-confirm";
+    confirmButton.textContent = options.confirmLabel;
+    confirmButton.addEventListener("click", () => close(true));
+
+    actions.appendChild(cancelButton);
+    actions.appendChild(confirmButton);
+    box.appendChild(actions);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+  });
 }
 
 function saveCurrentAsNamedDraft(): void {
@@ -1009,6 +1329,7 @@ const appBuildStamp = requireElement<HTMLParagraphElement>("app-build-stamp");
 // without needing remote devtools access.
 appBuildStamp.textContent = `Build: ${__APP_BUILD__}`;
 console.log(`[kithan-app] Build: ${__APP_BUILD__}`);
+const wohnungsnummerLageGroup = requireElement<HTMLDivElement>("wohnungsnummer-lage-group");
 const labelBesichtigt = requireElement<HTMLLabelElement>("label-besichtigt");
 const labelBesichtigungsdatum = requireElement<HTMLLabelElement>("label-besichtigungsdatum");
 const headingRaeume = requireElement<HTMLHeadingElement>("heading-raeume");
@@ -2389,6 +2710,7 @@ function buildProtocolPdfInput(
     keyVerb: keyHandoverVerb(protokollart),
     mietername: form.kopfdaten.mietername,
     wohnungEinheit: getGebaeudeLabel(form.kopfdaten.gebaeudeAuswahl),
+    wohnungsnummerLage: form.kopfdaten.wohnungsnummerLage,
     besichtigungsdatum: form.kopfdaten.besichtigungsdatum,
     maengelStatus: maengelStatusLabel(form.kopfdaten.maengelStatus),
     rooms: collectRoomsForPdf(objektart, form),
@@ -2596,7 +2918,7 @@ function renderMieterEmailSection(parent: HTMLElement, mieterPdfOk: boolean): vo
  */
 function renderCompletionTop(
   protokollart: Protokollart,
-  archiveOk: boolean,
+  archiveResult: ProtocolArchiveUploadResult | null,
   mieterPdfOk: boolean
 ): void {
   let top = document.getElementById("protocol-completion-top");
@@ -2612,15 +2934,46 @@ function renderCompletionTop(
   banner.className = "protocol-completion-banner";
   banner.setAttribute("role", "status");
 
+  const archiveOk = archiveResult?.ok ?? false;
+
   if (archiveOk && mieterPdfOk) {
     banner.textContent = `✅ ${kind} erfolgreich abgeschlossen. PDF, Fotos und Videos wurden erfolgreich auf den Firmenserver übertragen.`;
-  } else {
+  } else if (!mieterPdfOk) {
+    // Lokale PDF-Erstellung ist bereits gescheitert — es fand noch gar kein
+    // Netzwerk-Request statt (weder für Medien noch für das Protokoll-PDF).
     console.error(
-      `[renderCompletionTop] showing "Server momentan nicht erreichbar" — archiveOk=${archiveOk} mieterPdfOk=${mieterPdfOk}. See earlier [finishProtocolAsPdf]/[uploadMediaRecord]/[blob-ftps-upload] logs above for the actual cause.`
+      "[renderCompletionTop] PDF-Erstellung selbst ist fehlgeschlagen — kein Upload-Request wurde ausgelöst. Siehe [finishProtocolAsPdf] Log oben für die Fehlerdetails."
     );
     banner.classList.add("is-error");
     banner.textContent =
-      "⚠ Server momentan nicht erreichbar. Das Protokoll wurde lokal gespeichert und kann später erneut übertragen werden.";
+      "⚠ Das PDF konnte nicht erstellt werden. Die Daten wurden lokal gespeichert; bitte erneut versuchen.";
+  } else {
+    // Medien-Upload (Fotos/Videos, /api/blob-upload-token + /api/ftps-transfer
+    // je Datei) und Protokoll-PDF-Upload (derselbe Weg, aber eigener Request
+    // für die PDF-Datei) sind unabhängige Requests — hier getrennt ausweisen,
+    // statt eines pauschalen "Server nicht erreichbar" für beides.
+    const mediaFailedCount = (archiveResult?.photoFailed ?? 0) + (archiveResult?.videoFailed ?? 0);
+    const mediaOk = mediaFailedCount === 0;
+    const pdfOk = archiveResult?.pdfUploaded ?? false;
+
+    console.error(
+      `[renderCompletionTop] partial/failed archive upload — photoUploaded=${archiveResult?.photoUploaded} photoFailed=${archiveResult?.photoFailed} videoUploaded=${archiveResult?.videoUploaded} videoFailed=${archiveResult?.videoFailed} pdfUploaded=${archiveResult?.pdfUploaded}. See [protocol-archive]/[uploadMediaRecord]/[blob-ftps-upload] logs above for exact HTTP status/response per failed item.`
+    );
+
+    const lines: string[] = [];
+    lines.push(
+      mediaOk
+        ? "✅ Medien (Fotos/Videos) erfolgreich hochgeladen."
+        : `⚠ ${mediaFailedCount} Foto(s)/Video(s) konnten nicht zum Server übertragen werden und wurden lokal gespeichert.`
+    );
+    lines.push(
+      pdfOk
+        ? "✅ Protokoll-PDF erfolgreich auf den Firmenserver übertragen."
+        : "⚠ Protokoll konnte nicht zum Server übertragen werden und wurde lokal gespeichert."
+    );
+
+    banner.classList.add("is-error");
+    banner.textContent = lines.join("\n");
   }
   top.appendChild(banner);
 
@@ -2643,6 +2996,21 @@ async function finishProtocolAsPdf(): Promise<void> {
   if (!form) {
     showDraftStatus("Formular konnte nicht gelesen werden.", true);
     return;
+  }
+
+  // Wohnungsnummer/Lage ist nur bei Privat/Gewerbe verpflichtend (Garage hat keine
+  // Wohnungen) — fehlt sie dort, warnen wir deutlich, blockieren den Abschluss aber nicht hart.
+  if (context.objektart !== "garage" && form.kopfdaten.wohnungsnummerLage.trim() === "") {
+    const proceedAnyway = await showConfirmDialog({
+      message: "Die Wohnungsnummer/Lage wurde nicht ausgefüllt. Trotzdem abschließen?",
+      cancelLabel: "Zurück",
+      confirmLabel: "Trotzdem abschließen",
+    });
+    if (!proceedAnyway) {
+      wohnungsnummerLageGroup.scrollIntoView({ behavior: "smooth", block: "center" });
+      requireElement<HTMLInputElement>("wohnungsnummer-lage").focus();
+      return;
+    }
   }
 
   // Keep / refresh entry in „Meine Entwürfe“ — do not clear on abschließen.
@@ -2681,11 +3049,11 @@ async function finishProtocolAsPdf(): Promise<void> {
     mieterPdfOk = true;
   } catch (error) {
     // This happens BEFORE any network request — if this throws, the archive
-    // upload below is skipped entirely (no Blob/FTPS call at all), yet the
-    // banner would still say "Server momentan nicht erreichbar", which is
-    // misleading: the real cause here is local PDF generation, not the network.
+    // upload below is skipped entirely (no Blob/FTPS call at all). renderCompletionTop
+    // shows a distinct "PDF konnte nicht erstellt werden" message for this case
+    // (mieterPdfOk=false), not the generic upload-failure message.
     console.error(
-      "[finishProtocolAsPdf] PDF generation FAILED — archive upload will be skipped entirely (no network request will be made), but the banner will still read 'Server momentan nicht erreichbar':",
+      "[finishProtocolAsPdf] PDF generation FAILED — archive upload will be skipped entirely (no network request will be made):",
       error
     );
     completionMieterPdf = null;
@@ -2693,19 +3061,18 @@ async function finishProtocolAsPdf(): Promise<void> {
   }
 
   const sessionKey = formDraftKey(context.objektart, context.protokollart);
-  let archiveOk = false;
+  let archiveResult: ProtocolArchiveUploadResult | null = null;
   if (mieterPdfOk && completionMieterPdf) {
     try {
-      const archive = await uploadProtocolArchive({
+      archiveResult = await uploadProtocolArchive({
         sessionKey,
         pdfFilename: completionMieterPdf.filename,
         pdfBase64: completionMieterPdf.base64,
       });
-      archiveOk = archive.ok;
-      console.log("[finishProtocolAsPdf] uploadProtocolArchive result:", archive);
+      console.log("[finishProtocolAsPdf] uploadProtocolArchive result:", archiveResult);
     } catch (error) {
       console.error("[finishProtocolAsPdf] uploadProtocolArchive threw unexpectedly:", error);
-      archiveOk = false;
+      archiveResult = null;
     }
   } else {
     console.warn(
@@ -2714,7 +3081,7 @@ async function finishProtocolAsPdf(): Promise<void> {
   }
 
   // Only after all transfers finished: final message + email section (no form body).
-  renderCompletionTop(context.protokollart, archiveOk, mieterPdfOk);
+  renderCompletionTop(context.protokollart, archiveResult, mieterPdfOk);
 }
 
 function clearCurrentSessionDraft(): void {
@@ -2889,7 +3256,7 @@ function restoreKopfdaten(draft: FormDraft): void {
   const vermieter = requireElement<HTMLSelectElement>("vermieter-auswahl");
   const mietername = requireElement<HTMLInputElement>("mietername");
   const gebaeude = requireElement<HTMLSelectElement>("gebaeude-auswahl");
-  const bemerkung = requireElement<HTMLInputElement>("kopfdaten-bemerkung");
+  const wohnungsnummerLage = requireElement<HTMLInputElement>("wohnungsnummer-lage");
   const datum = requireElement<HTMLInputElement>("besichtigungsdatum");
   const keine = requireElement<HTMLInputElement>("keine-maengel");
   const folgende = requireElement<HTMLInputElement>("folgende-maengel");
@@ -2897,7 +3264,7 @@ function restoreKopfdaten(draft: FormDraft): void {
   vermieter.value = draft.kopfdaten.vermieter;
   mietername.value = draft.kopfdaten.mietername;
   gebaeude.value = draft.kopfdaten.gebaeudeAuswahl;
-  bemerkung.value = draft.kopfdaten.bemerkung;
+  wohnungsnummerLage.value = draft.kopfdaten.wohnungsnummerLage;
   datum.value = draft.kopfdaten.besichtigungsdatum;
   keine.checked = draft.kopfdaten.maengelStatus === "keine";
   folgende.checked = draft.kopfdaten.maengelStatus === "folgende";
@@ -3085,7 +3452,7 @@ function persistKopfdatenFromDom(): void {
   const vermieter = requireElement<HTMLSelectElement>("vermieter-auswahl");
   const mietername = requireElement<HTMLInputElement>("mietername");
   const gebaeude = requireElement<HTMLSelectElement>("gebaeude-auswahl");
-  const bemerkung = requireElement<HTMLInputElement>("kopfdaten-bemerkung");
+  const wohnungsnummerLage = requireElement<HTMLInputElement>("wohnungsnummer-lage");
   const datum = requireElement<HTMLInputElement>("besichtigungsdatum");
   const keine = requireElement<HTMLInputElement>("keine-maengel");
   const folgende = requireElement<HTMLInputElement>("folgende-maengel");
@@ -3102,7 +3469,7 @@ function persistKopfdatenFromDom(): void {
       vermieter: vermieter.value,
       mietername: mietername.value,
       gebaeudeAuswahl: gebaeude.value,
-      bemerkung: bemerkung.value,
+      wohnungsnummerLage: wohnungsnummerLage.value,
       besichtigungsdatum: datum.value,
       maengelStatus,
     };
@@ -3113,7 +3480,7 @@ function initKopfdatenAutosave(): void {
   const vermieter = requireElement<HTMLSelectElement>("vermieter-auswahl");
   const mietername = requireElement<HTMLInputElement>("mietername");
   const gebaeude = requireElement<HTMLSelectElement>("gebaeude-auswahl");
-  const bemerkung = requireElement<HTMLInputElement>("kopfdaten-bemerkung");
+  const wohnungsnummerLage = requireElement<HTMLInputElement>("wohnungsnummer-lage");
   const datum = requireElement<HTMLInputElement>("besichtigungsdatum");
   const keine = requireElement<HTMLInputElement>("keine-maengel");
   const folgende = requireElement<HTMLInputElement>("folgende-maengel");
@@ -3121,7 +3488,7 @@ function initKopfdatenAutosave(): void {
   vermieter.addEventListener("change", persistKopfdatenFromDom);
   mietername.addEventListener("input", persistKopfdatenFromDom);
   gebaeude.addEventListener("change", persistKopfdatenFromDom);
-  bemerkung.addEventListener("input", persistKopfdatenFromDom);
+  wohnungsnummerLage.addEventListener("input", persistKopfdatenFromDom);
   datum.addEventListener("change", persistKopfdatenFromDom);
   datum.addEventListener("input", persistKopfdatenFromDom);
   keine.addEventListener("change", persistKopfdatenFromDom);

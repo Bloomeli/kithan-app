@@ -35,6 +35,7 @@ export interface ProtocolPdfInput {
   keyVerb: string;
   mietername: string;
   wohnungEinheit: string;
+  wohnungsnummerLage: string;
   besichtigungsdatum: string;
   maengelStatus: string;
   rooms: ProtocolPdfRoom[];
@@ -241,6 +242,9 @@ export function generateAndDownloadProtocolPdf(input: ProtocolPdfInput): Protoco
   writer.addSection("Kopfdaten");
   writer.addLine("Name der/des Mieter(s)", input.mietername);
   writer.addLine("Wohnung/Einheit", input.wohnungEinheit);
+  if (input.wohnungsnummerLage) {
+    writer.addLine("Wohnungsnummer / Lage", input.wohnungsnummerLage);
+  }
   writer.addLine("Datum", formatDateDe(input.besichtigungsdatum));
   writer.addLine("Mängelstatus", input.maengelStatus);
 

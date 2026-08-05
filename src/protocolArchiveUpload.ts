@@ -75,23 +75,49 @@ export async function uploadProtocolArchive(
   const photos = records.filter((r) => r.kind === "photo");
   const videos = records.filter((r) => r.kind === "video");
 
+  // Fotos/Videos wurden bereits direkt nach der Aufnahme einzeln hochgeladen
+  // (siehe cardMedia.ts). Ein bereits erfolgreich übertragenes Medium hier
+  // erneut hochzuladen wäre unnötig (doppelte Bandbreite/Zeit) und könnte
+  // einen zweiten, unabhängigen Fehlschlag erzeugen, obwohl das Foto/Video
+  // beim Nutzer längst als "erfolgreich gesendet" angezeigt wurde — genau das
+  // führte zu dem widersprüchlichen "Medien erfolgreich" + "Server nicht
+  // erreichbar"-Bild. Nur tatsächlich noch offene/fehlgeschlagene Medien
+  // werden hier (erneut) versucht.
   for (const record of photos) {
+    if (record.uploadStatus === "uploaded") {
+      result.photoUploaded += 1;
+      continue;
+    }
     try {
       await uploadMediaRecord(record.id);
       result.photoUploaded += 1;
     } catch (error) {
       result.photoFailed += 1;
-      console.warn("[protocol-archive] photo failed", record.id, error);
+      console.error("[protocol-archive] photo upload failed", {
+        mediaId: record.id,
+        errorName: error instanceof Error ? error.name : typeof error,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        rawError: error,
+      });
     }
   }
 
   for (const record of videos) {
+    if (record.uploadStatus === "uploaded") {
+      result.videoUploaded += 1;
+      continue;
+    }
     try {
       await uploadMediaRecord(record.id);
       result.videoUploaded += 1;
     } catch (error) {
       result.videoFailed += 1;
-      console.warn("[protocol-archive] video failed", record.id, error);
+      console.error("[protocol-archive] video upload failed", {
+        mediaId: record.id,
+        errorName: error instanceof Error ? error.name : typeof error,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        rawError: error,
+      });
     }
   }
 
@@ -99,7 +125,12 @@ export async function uploadProtocolArchive(
     result.pdfUploaded = await uploadPdfToServer(input.pdfFilename, input.pdfBase64);
   } catch (error) {
     result.pdfUploaded = false;
-    console.warn("[protocol-archive] pdf failed", error);
+    console.error("[protocol-archive] PDF (Protokoll) upload failed — this is a SEPARATE request/endpoint from the photo/video uploads above", {
+      errorName: error instanceof Error ? error.name : typeof error,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      errorStack: error instanceof Error ? error.stack : undefined,
+      rawError: error,
+    });
   }
 
   result.ok =

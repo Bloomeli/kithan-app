@@ -880,6 +880,50 @@ body {
     min-height: 48px;
 }
 
+.confirm-dialog-overlay {
+    position: fixed;
+    inset: 0;
+    background-color: rgba(0, 0, 0, 0.75);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 20px;
+    z-index: 1000;
+}
+
+.confirm-dialog-box {
+    background-color: var(--dark-gray);
+    border: 2px solid var(--neon-purple);
+    border-radius: 12px;
+    padding: 24px 20px;
+    max-width: 400px;
+    width: 100%;
+}
+
+.confirm-dialog-message {
+    color: var(--text-color);
+    font-size: 1rem;
+    line-height: 1.5;
+    margin: 0 0 20px;
+    white-space: pre-wrap;
+}
+
+.confirm-dialog-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.confirm-dialog-cancel {
+    border-color: var(--neon-green);
+    color: var(--neon-green);
+}
+
+.confirm-dialog-confirm {
+    border-color: var(--neon-purple);
+    color: var(--neon-purple);
+}
+
 /* Zusammengehörige Felder (z.B. HT/NT, Zählernummer/Zählerstand):
    auf schmalen Bildschirmen einspaltig, auf breiteren zweispaltig. */
 .field-grid-2 {

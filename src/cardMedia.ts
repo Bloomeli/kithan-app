@@ -183,7 +183,7 @@ function createUploadStatusRow(
 
   if (status === "uploaded") {
     row.classList.add("is-success");
-    row.textContent = "✅ Medien wurde erfolgreich gesendet.";
+    row.textContent = "✅ Medien erfolgreich hochgeladen.";
     return row;
   }
 
