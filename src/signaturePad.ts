@@ -46,6 +46,16 @@ export class SignaturePad {
     window.visualViewport?.addEventListener("scroll", this.onResize);
 
     this.resize();
+    // The canvas can still be inside a hidden (display:none / not-yet-shown)
+    // ancestor at construction time (e.g. renderSignatureSection() builds the
+    // whole form section before the view container is switched visible) —
+    // getBoundingClientRect() then returns 0x0, so this initial resize()
+    // caches a bogus tiny size. Re-checking one frame later, once the view is
+    // guaranteed visible, self-corrects that without requiring every call
+    // site to worry about layout/visibility timing. Combined with resize()'s
+    // own snapshot-preserving logic below, this does not lose a signature
+    // that was restored (loadFromDataURL) or drawn in that first frame.
+    requestAnimationFrame(() => this.resize());
   }
 
   destroy(): void {
@@ -113,7 +123,11 @@ export class SignaturePad {
       return;
     }
 
-    const snapshot = this.strokes > 0 ? this.canvas.toDataURL("image/png") : null;
+    // Uses this.toDataURL() (not this.canvas.toDataURL() directly) so that a
+    // resize happening while a restored signature (loadFromDataURL) is still
+    // decoding falls back to the exact original data instead of snapshotting
+    // a still-blank/undersized canvas and permanently losing it.
+    const snapshot = this.strokes > 0 ? this.toDataURL("image/png") : null;
 
     this.cssWidth = cssWidth;
     this.cssHeight = cssHeight;
