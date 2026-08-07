@@ -422,8 +422,12 @@ interface SchluesselEntry {
 }
 
 interface SchluesselDraft {
+  vermieter: string;
   mietername: string;
-  wohnungEinheit: string;
+  gebaeudeAuswahl: string;
+  /** Konkrete Wohnung/Einheit INNERHALB des unter gebaeudeAuswahl gewählten Gebäudes — gleiche Bedeutung wie KopfdatenDraft.wohnungsnummerLage. */
+  wohnungsnummerLage: string;
+  besichtigungsdatum: string;
   bemerkungen: string;
   entries: SchluesselEntry[];
 }
@@ -547,8 +551,11 @@ function emptySchluesselEntry(): SchluesselEntry {
 
 function emptySchluesselDraft(): SchluesselDraft {
   return {
+    vermieter: "",
     mietername: "",
-    wohnungEinheit: "",
+    gebaeudeAuswahl: "",
+    wohnungsnummerLage: "",
+    besichtigungsdatum: "",
     bemerkungen: "",
     entries: [emptySchluesselEntry()],
   };
@@ -557,6 +564,8 @@ function emptySchluesselDraft(): SchluesselDraft {
 type LegacySchluesselDraft = Partial<SchluesselDraft> & {
   anzahl?: string;
   schluesselnummer?: string;
+  /** Altes freies Adressfeld vor Einführung des Gebäude-Dropdowns — wird nach wohnungsnummerLage migriert. */
+  wohnungEinheit?: string;
 };
 
 function normalizeSchluesselDraft(raw: LegacySchluesselDraft | null | undefined): SchluesselDraft | null {
@@ -584,8 +593,14 @@ function normalizeSchluesselDraft(raw: LegacySchluesselDraft | null | undefined)
   }
 
   return {
+    vermieter: raw.vermieter ?? "",
     mietername: raw.mietername ?? "",
-    wohnungEinheit: raw.wohnungEinheit ?? "",
+    gebaeudeAuswahl: raw.gebaeudeAuswahl ?? "",
+    // Legacy-Migration: das frühere freie "Wohnung/Einheit"-Textfeld wird nun durch
+    // ein Gebäude-Dropdown + dieses Freitextfeld ersetzt — bereits erfasster Text
+    // geht nicht verloren, landet aber (mangels zuordenbarer Gebäude-ID) hier.
+    wohnungsnummerLage: raw.wohnungsnummerLage ?? raw.wohnungEinheit ?? "",
+    besichtigungsdatum: raw.besichtigungsdatum ?? "",
     bemerkungen: raw.bemerkungen ?? "",
     entries,
   };
@@ -863,8 +878,8 @@ function getGebaeudeLabel(value: string): string {
   return option?.textContent?.trim() || value;
 }
 
-function populateGebaeudeSelect(): void {
-  const select = requireElement<HTMLSelectElement>("gebaeude-auswahl");
+function populateGebaeudeSelect(selectId: string = "gebaeude-auswahl"): void {
+  const select = requireElement<HTMLSelectElement>(selectId);
   const previousValue = select.value;
 
   select.innerHTML = "";
@@ -1457,6 +1472,7 @@ console.log(`[kithan-app] Build: ${__APP_BUILD__}`);
 const wohnungsnummerLageGroup = requireElement<HTMLDivElement>("wohnungsnummer-lage-group");
 const labelBesichtigt = requireElement<HTMLLabelElement>("label-besichtigt");
 const labelBesichtigungsdatum = requireElement<HTMLLabelElement>("label-besichtigungsdatum");
+const labelSchluesselBesichtigungsdatum = requireElement<HTMLLabelElement>("label-schluessel-besichtigungsdatum");
 const headingRaeume = requireElement<HTMLHeadingElement>("heading-raeume");
 const roomsContainer = requireElement<HTMLDivElement>("rooms-container");
 const metersContainer = requireElement<HTMLDivElement>("meters-container");
@@ -2890,7 +2906,9 @@ function buildSchluesselPdfInput(protokollart: Protokollart, form: FormDraft): S
   return {
     protokollartLabel: PROTOKOLLART_LABELS[protokollart],
     mietername: data.mietername,
-    wohnungEinheit: data.wohnungEinheit,
+    wohnungEinheit: getGebaeudeLabel(data.gebaeudeAuswahl),
+    wohnungsnummerLage: data.wohnungsnummerLage,
+    besichtigungsdatum: data.besichtigungsdatum,
     bemerkungen: data.bemerkungen,
     entries,
     signatureDatum,
@@ -3481,7 +3499,7 @@ async function finishSchluesselAsPdf(): Promise<void> {
       pdfFilename = buildVorgangPdfFilename(
         vorgangsnummer,
         form.schluessel?.mietername ?? "",
-        form.schluessel?.wohnungEinheit ?? ""
+        getGebaeudeLabel(form.schluessel?.gebaeudeAuswahl ?? "")
       );
       pdfRemoteSubdir = buildVorgangRemoteSubdir(context.objektart, context.protokollart, numberResult.jahr);
       console.log(
@@ -3715,14 +3733,20 @@ function clearKopfdatenFields(): void {
 }
 
 function persistSchluesselFromDom(): void {
+  const vermieter = requireElement<HTMLSelectElement>("schluessel-vermieter-auswahl");
   const mietername = requireElement<HTMLInputElement>("schluessel-mietername");
-  const wohnung = requireElement<HTMLInputElement>("schluessel-wohnung");
+  const gebaeude = requireElement<HTMLSelectElement>("schluessel-gebaeude-auswahl");
+  const wohnungsnummerLage = requireElement<HTMLInputElement>("schluessel-wohnungsnummer-lage");
+  const datum = requireElement<HTMLInputElement>("schluessel-besichtigungsdatum");
   const bemerkungen = requireElement<HTMLTextAreaElement>("schluessel-bemerkungen");
 
   updateCurrentFormDraft((draft) => {
     draft.schluessel = {
+      vermieter: vermieter.value,
       mietername: mietername.value,
-      wohnungEinheit: wohnung.value,
+      gebaeudeAuswahl: gebaeude.value,
+      wohnungsnummerLage: wohnungsnummerLage.value,
+      besichtigungsdatum: datum.value,
       bemerkungen: bemerkungen.value,
       entries: JSON.parse(JSON.stringify(schluesselEntryState)) as SchluesselEntry[],
     };
@@ -3863,8 +3887,11 @@ function renderSchluesselEntries(): void {
 
 function restoreSchluessel(draft: FormDraft): void {
   const data = draft.schluessel ?? emptySchluesselDraft();
+  requireElement<HTMLSelectElement>("schluessel-vermieter-auswahl").value = data.vermieter;
   requireElement<HTMLInputElement>("schluessel-mietername").value = data.mietername;
-  requireElement<HTMLInputElement>("schluessel-wohnung").value = data.wohnungEinheit;
+  requireElement<HTMLSelectElement>("schluessel-gebaeude-auswahl").value = data.gebaeudeAuswahl;
+  requireElement<HTMLInputElement>("schluessel-wohnungsnummer-lage").value = data.wohnungsnummerLage;
+  requireElement<HTMLInputElement>("schluessel-besichtigungsdatum").value = data.besichtigungsdatum;
   requireElement<HTMLTextAreaElement>("schluessel-bemerkungen").value = data.bemerkungen;
   schluesselEntryState = JSON.parse(JSON.stringify(data.entries)) as SchluesselEntry[];
   if (schluesselEntryState.length === 0) {
@@ -3878,12 +3905,19 @@ function clearSchluesselFields(): void {
 }
 
 function initSchluesselAutosave(): void {
+  const vermieter = requireElement<HTMLSelectElement>("schluessel-vermieter-auswahl");
   const mietername = requireElement<HTMLInputElement>("schluessel-mietername");
-  const wohnung = requireElement<HTMLInputElement>("schluessel-wohnung");
+  const gebaeude = requireElement<HTMLSelectElement>("schluessel-gebaeude-auswahl");
+  const wohnungsnummerLage = requireElement<HTMLInputElement>("schluessel-wohnungsnummer-lage");
+  const datum = requireElement<HTMLInputElement>("schluessel-besichtigungsdatum");
   const bemerkungen = requireElement<HTMLTextAreaElement>("schluessel-bemerkungen");
 
+  vermieter.addEventListener("change", persistSchluesselFromDom);
   mietername.addEventListener("input", persistSchluesselFromDom);
-  wohnung.addEventListener("input", persistSchluesselFromDom);
+  gebaeude.addEventListener("change", persistSchluesselFromDom);
+  wohnungsnummerLage.addEventListener("input", persistSchluesselFromDom);
+  datum.addEventListener("change", persistSchluesselFromDom);
+  datum.addEventListener("input", persistSchluesselFromDom);
   bemerkungen.addEventListener("input", persistSchluesselFromDom);
 }
 
@@ -3936,6 +3970,8 @@ function initKopfdatenAutosave(): void {
 
 function applyFormLabels(objektart: Objektart, protokollart: Protokollart): void {
   if (objektart === "schluessel") {
+    labelSchluesselBesichtigungsdatum.textContent =
+      protokollart === "uebergabe" ? "Datum der Übergabe" : "Datum der Rücknahme";
     return;
   }
   labelBesichtigt.textContent = "Wohnung/Einheit:";
@@ -3981,6 +4017,7 @@ function showFormular(objektart: Objektart, protokollart: Protokollart): void {
     // (everything below runs synchronously — the browser never paints the
     // "half-built" intermediate state either way).
     showOnly(viewFormular);
+    applyFormLabels(objektart, protokollart);
     restoreSchluessel(draft);
     if (!draft.schluessel) {
       persistSchluesselFromDom();
@@ -4128,7 +4165,8 @@ function initEventListeners(): void {
 }
 
 function init(): void {
-  populateGebaeudeSelect();
+  populateGebaeudeSelect("gebaeude-auswahl");
+  populateGebaeudeSelect("schluessel-gebaeude-auswahl");
   initEventListeners();
   restoreSelection();
   // Safari/WebKit: verify Blob/ArrayBuffer IDB write path early (log-only).

@@ -105,13 +105,39 @@
                 <h2 class="heading-kopfdaten" style="margin-bottom: 20px;">Kopfdaten</h2>
 
                 <div class="input-group">
+                    <label for="schluessel-vermieter-auswahl">Vermieter:</label>
+                    <select id="schluessel-vermieter-auswahl">
+                        <option value="" disabled selected>Bitte Vermieter wählen...</option>
+                        <option value="kithan-grundstuecks-handels">Kithan Grundstücks- und Handels GmbH</option>
+                        <option value="kithan-gmbh">Kithan GmbH</option>
+                        <option value="kithan-leopoldstrasse">Kithan Leopoldstraße GmbH</option>
+                        <option value="kithan-erlangen">Kithan Erlangen GmbH</option>
+                        <option value="kithan-erlangen-mvs">Kithan Erlangen MVS GmbH</option>
+                        <option value="kita-projekt-koeln">Kita Projekt Köln</option>
+                        <option value="kithan-koeln-hyazinthenweg">Kithan Köln GmbH Hyazinthenweg</option>
+                    </select>
+                </div>
+
+                <div class="input-group">
                     <label for="schluessel-mietername">Name der/des Mieter(s):</label>
                     <input type="text" id="schluessel-mietername" placeholder="z.B. Max Mustermann">
                 </div>
 
                 <div class="input-group">
-                    <label for="schluessel-wohnung">Wohnung/Einheit:</label>
-                    <input type="text" id="schluessel-wohnung" placeholder="z.B. Musterstraße 1">
+                    <label for="schluessel-gebaeude-auswahl">Wohnung/Einheit:</label>
+                    <select id="schluessel-gebaeude-auswahl">
+                        <option value="" disabled selected>Bitte Gebäude wählen...</option>
+                    </select>
+                </div>
+
+                <div class="input-group" id="schluessel-wohnungsnummer-lage-group">
+                    <label for="schluessel-wohnungsnummer-lage">Wohnungsnummer / Lage: *</label>
+                    <input type="text" id="schluessel-wohnungsnummer-lage" placeholder="z.B. WHG 07, EG links, 2. OG rechts, Büro 3, Laden A" required>
+                </div>
+
+                <div class="input-group">
+                    <label id="label-schluessel-besichtigungsdatum" for="schluessel-besichtigungsdatum">Datum der Übergabe</label>
+                    <input type="date" id="schluessel-besichtigungsdatum">
                 </div>
 
                 <div id="schluessel-entries-container"></div>

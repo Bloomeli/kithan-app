@@ -62,6 +62,8 @@ export interface SchluesselPdfInput {
   protokollartLabel: string;
   mietername: string;
   wohnungEinheit: string;
+  wohnungsnummerLage: string;
+  besichtigungsdatum: string;
   bemerkungen: string;
   entries: SchluesselPdfEntry[];
   signatureDatum: string;
@@ -331,6 +333,10 @@ export function generateAndDownloadSchluesselPdf(input: SchluesselPdfInput): { f
   writer.addSection("Kopfdaten");
   writer.addLine("Name des Mieters", input.mietername);
   writer.addLine("Wohnung/Einheit", input.wohnungEinheit);
+  if (input.wohnungsnummerLage) {
+    writer.addLine("Wohnungsnummer / Lage", input.wohnungsnummerLage);
+  }
+  writer.addLine("Datum", formatDateDe(input.besichtigungsdatum));
 
   writer.addSection("Schlüssel");
   if (input.entries.length === 0) {
