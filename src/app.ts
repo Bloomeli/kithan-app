@@ -3436,6 +3436,124 @@ async function finishSchluesselAsPdf(): Promise<void> {
     return;
   }
 
+  // Harte Pflichtfeld-Prüfung: gleiche Logik wie bei Privat/Gewerbe/Garage
+  // (siehe finishProtocolAsPdf) — Datum, Vermieter, Mietername, Wohnung/Einheit,
+  // Anzahl der Schlüssel + Schlüsselnummer je Eintrag sowie beide Unterschriften
+  // (Name in Druckbuchstaben + Unterschrift) und das Unterschriften-Datum MÜSSEN
+  // ausgefüllt sein. Ausgenommen (nie verpflichtend): Wohnungsnummer/Lage,
+  // Sonstiges/Bemerkungen und der komplette Zeuge(n)-Bereich.
+  const schluesselData = form.schluessel ?? emptySchluesselDraft();
+  const missingFields: { label: string; focus: () => void }[] = [];
+
+  if (schluesselData.besichtigungsdatum.trim() === "") {
+    missingFields.push({
+      label: "Datum",
+      focus: () => requireElement<HTMLInputElement>("schluessel-besichtigungsdatum").focus(),
+    });
+  }
+  if (schluesselData.vermieter.trim() === "") {
+    missingFields.push({
+      label: "Vermieter",
+      focus: () => requireElement<HTMLSelectElement>("schluessel-vermieter-auswahl").focus(),
+    });
+  }
+  if (schluesselData.mietername.trim() === "") {
+    missingFields.push({
+      label: "Name der/des Mieter(s)",
+      focus: () => requireElement<HTMLInputElement>("schluessel-mietername").focus(),
+    });
+  }
+  if (schluesselData.gebaeudeAuswahl.trim() === "") {
+    missingFields.push({
+      label: "Wohnung/Einheit",
+      focus: () => requireElement<HTMLSelectElement>("schluessel-gebaeude-auswahl").focus(),
+    });
+  }
+  schluesselData.entries.forEach((entry, index) => {
+    const suffix = schluesselData.entries.length > 1 ? ` (Schlüssel ${index + 1})` : "";
+    if (entry.anzahl.trim() === "") {
+      missingFields.push({
+        label: `Anzahl der Schlüssel${suffix}`,
+        focus: () => {
+          document
+            .getElementById(`schluessel-anzahl-${index}`)
+            ?.scrollIntoView({ behavior: "smooth", block: "center" });
+        },
+      });
+    }
+    if (entry.schluesselnummer.trim() === "") {
+      missingFields.push({
+        label: `Schlüsselnummer${suffix}`,
+        focus: () => {
+          const el = document.getElementById(`schluessel-nummer-${index}`);
+          el?.scrollIntoView({ behavior: "smooth", block: "center" });
+          (el as HTMLInputElement | null)?.focus();
+        },
+      });
+    }
+  });
+  if (signatureDatum.trim() === "") {
+    missingFields.push({
+      label: "Datum (bei den Unterschriften)",
+      focus: () => {
+        const el = document.getElementById("schluessel-signature-datum");
+        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+        (el as HTMLInputElement | null)?.focus();
+      },
+    });
+  }
+  if (vermieterDruckbuchstaben.trim() === "") {
+    missingFields.push({
+      label: "Name in Druckbuchstaben (Vermieter)",
+      focus: () => {
+        const el = document.getElementById("schluessel-vermieter-druckbuchstaben");
+        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+        (el as HTMLInputElement | null)?.focus();
+      },
+    });
+  }
+  if (!vermieterSignaturePad || vermieterSignaturePad.isEmpty()) {
+    missingFields.push({
+      label: "Unterschrift Vermieter",
+      focus: () => {
+        document
+          .getElementById("schluessel-signature-vermieter")
+          ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      },
+    });
+  }
+  if (mieterDruckbuchstaben.trim() === "") {
+    missingFields.push({
+      label: "Name in Druckbuchstaben (Mieter)",
+      focus: () => {
+        const el = document.getElementById("schluessel-mieter-druckbuchstaben");
+        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+        (el as HTMLInputElement | null)?.focus();
+      },
+    });
+  }
+  if (!mieterSignaturePad || mieterSignaturePad.isEmpty()) {
+    missingFields.push({
+      label: "Unterschrift Mieter",
+      focus: () => {
+        document
+          .getElementById("schluessel-signature-mieter")
+          ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      },
+    });
+  }
+
+  if (missingFields.length > 0) {
+    await showAlertDialog(
+      `Folgende Pflichtangaben fehlen noch und müssen ausgefüllt werden, bevor die Schlüssel-Übergabe/-Rücknahme abgeschlossen werden kann:\n\n${missingFields
+        .map((field) => `• ${field.label}`)
+        .join("\n")}`,
+      "Zurück zum Formular"
+    );
+    missingFields[0].focus();
+    return;
+  }
+
   // Keep / refresh entry in „Meine Entwürfe“ — do not clear on abschließen
   // (gleiches Verhalten wie beim Standard-Formular, siehe finishProtocolAsPdf).
   upsertCompletionNamedDraft(context, form);
