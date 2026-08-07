@@ -3,7 +3,7 @@
 
 import { SignaturePad } from "./signaturePad";
 import { createCardMediaControls, createRoomOkMediaRow } from "./cardMedia";
-import { deleteMediaForOwner, deleteMediaForSession, runMediaDbSelfTest } from "./mediaStore";
+import { deleteMediaForOwner, deleteMediaForSession, getMediaForOwner, runMediaDbSelfTest } from "./mediaStore";
 import {
   generateAndDownloadProtocolPdf,
   generateAndDownloadSchluesselPdf,
@@ -16,6 +16,7 @@ import {
 } from "./generateProtocolPdf";
 import { sendProtocolEmail } from "./sendProtocolEmail";
 import { uploadProtocolArchive, type ProtocolArchiveUploadResult } from "./protocolArchiveUpload";
+import { extensionFor } from "./blobFtpsUpload";
 import { acquireUploadWakeLock, releaseUploadWakeLock } from "./wakeLock";
 import { requestVorgangsnummer } from "./vorgangsnummer";
 
@@ -2771,6 +2772,108 @@ function collectRoomsForPdf(
   return rooms;
 }
 
+/**
+ * Liefert Raum-Reihenfolge + zugehörigen Medien-ownerKey für Privat/Gewerbe/
+ * Garage — MUSS in exakt derselben Reihenfolge sein wie collectRoomsForPdf()
+ * oben, da spätere Schritte (Firmenversion-PDF mit Bildunterschriften,
+ * Vorgangsordner-Ablage) Raum-Nummer (01, 02, …) und Rauminhalt zueinander
+ * passend brauchen. Absichtlich eine separate, schlanke Funktion statt eines
+ * Umbaus von collectRoomsForPdf, um die dort bereits geprüfte PDF-Text-Logik
+ * nicht anzufassen.
+ */
+function getRoomOwnerOrder(
+  objektart: "gewerbe" | "privat" | "garage",
+  form: FormDraft
+): { ownerKey: string; label: string }[] {
+  if (objektart === "garage") {
+    return (form.garageRooms ?? []).map((entry, index) => ({
+      ownerKey: entry.id,
+      label: `Garage ${index + 1}`,
+    }));
+  }
+
+  if (objektart === "privat") {
+    return [
+      ...RAEUME.privat.map((raum) => ({ ownerKey: raum.id, label: raum.label })),
+      ...(form.weitereRaeume ?? []).map((entry, index) => ({
+        ownerKey: entry.id,
+        label: `Weiterer Raum ${index + 1}`,
+      })),
+    ];
+  }
+
+  const gewerbeRooms = RAEUME.gewerbe;
+  return [
+    ...gewerbeRooms.slice(0, 3).map((raum) => ({ ownerKey: raum.id, label: raum.label })),
+    ...(form.bueroRooms ?? []).map((entry, index) => ({ ownerKey: entry.id, label: `Büro ${index + 1}` })),
+    ...gewerbeRooms.slice(3).map((raum) => ({ ownerKey: raum.id, label: raum.label })),
+    ...(form.weitereRaeume ?? []).map((entry, index) => ({
+      ownerKey: entry.id,
+      label: `Weiterer Raum ${index + 1}`,
+    })),
+  ];
+}
+
+export interface VorgangMediaNamingEntry {
+  mediaId: string;
+  ownerKey: string;
+  roomLabel: string;
+  /** 1-basiert, Position des Raums in der Übergabe/Rücknahme-Reihenfolge. */
+  roomIndex: number;
+  kind: "photo" | "video";
+  /** 1-basiert, laufende Nummer INNERHALB dieses Raums + Medientyps. */
+  indexWithinKind: number;
+  /** z.B. "01-Flur-Foto-02.jpg" — Rohname, Zeichen-Feinschliff übernimmt sanitizeFilename serverseitig (siehe api/ftps-transfer.ts). */
+  filename: string;
+}
+
+/**
+ * Schritt 5 des Architekturplans: berechnet die finale, lesbare Datei-
+ * Nummerierung ("01-Flur-Foto-01.jpg", "02-Wohnzimmer-Video-01.mov", …) für
+ * alle bereits aufgenommenen Fotos/Videos eines Vorgangs — Raum-Reihenfolge
+ * wie im Formular, laufende Nummer pro Raum+Medientyp in Aufnahme-
+ * Reihenfolge (bestehende createdAt-Sortierung aus getMediaForOwner).
+ *
+ * Reine Berechnung, keine Seiteneffekte: ändert nichts an Aufnahme, lokaler
+ * IndexedDB-Speicherung oder dem heutigen Sofort-Upload beim Fotografieren.
+ * Wird von den nächsten Schritten (Firmenversion-PDF mit Bildunterschriften/
+ * Video-Verweisen, Ablage im Vorgangsordner) als Eingabe verwendet.
+ */
+async function computeVorgangMediaNaming(
+  sessionKey: string,
+  objektart: "gewerbe" | "privat" | "garage",
+  form: FormDraft
+): Promise<VorgangMediaNamingEntry[]> {
+  const roomOrder = getRoomOwnerOrder(objektart, form);
+  const entries: VorgangMediaNamingEntry[] = [];
+
+  for (let i = 0; i < roomOrder.length; i += 1) {
+    const room = roomOrder[i];
+    const roomIndex = i + 1;
+    const roomPrefix = String(roomIndex).padStart(2, "0");
+    const records = await getMediaForOwner(sessionKey, room.ownerKey);
+
+    let photoCount = 0;
+    let videoCount = 0;
+    records.forEach((record) => {
+      const indexWithinKind = record.kind === "photo" ? (photoCount += 1) : (videoCount += 1);
+      const kindLabel = record.kind === "photo" ? "Foto" : "Video";
+      const ext = extensionFor(record.mimeType, record.kind);
+      entries.push({
+        mediaId: record.id,
+        ownerKey: room.ownerKey,
+        roomLabel: room.label,
+        roomIndex,
+        kind: record.kind,
+        indexWithinKind,
+        filename: `${roomPrefix}-${room.label}-${kindLabel}-${String(indexWithinKind).padStart(2, "0")}${ext}`,
+      });
+    });
+  }
+
+  return entries;
+}
+
 function collectStandardMetersForPdf(form: FormDraft): ProtocolPdfStandardMeter[] {
   if (!form.meters) {
     return [];
@@ -3355,6 +3458,24 @@ async function finishProtocolAsPdf(): Promise<void> {
   // gespeichert wurden (siehe getMediaSessionKey) — sonst findet der Archiv-
   // Upload keine Medien.
   const sessionKey = getOrCreateVorgangId(context.objektart, context.protokollart);
+
+  // Schritt 5 des Architekturplans (Datei-/Raumnummerierung): rein
+  // diagnostisch, bewusst nicht awaited und ohne jede Auswirkung auf den
+  // eigentlichen Upload — zeigt in der Konsole, welche lesbaren Dateinamen
+  // ("01-Flur-Foto-01.jpg" usw.) für die bereits aufgenommenen Fotos/Videos
+  // berechnet würden. Wird von den nächsten Schritten (Firmenversion-PDF,
+  // Ablage im Vorgangsordner) tatsächlich verwendet.
+  computeVorgangMediaNaming(sessionKey, context.objektart, form)
+    .then((naming) => {
+      console.log(
+        `[vorgang-naming] Berechnete Datei-Nummerierung (${naming.length} Datei(en)):`,
+        naming.map((entry) => entry.filename)
+      );
+    })
+    .catch((error) => {
+      console.error("[vorgang-naming] Berechnung der Datei-Nummerierung fehlgeschlagen:", error);
+    });
+
   let archiveResult: ProtocolArchiveUploadResult | null = null;
   let vorgangsnummer: string | null = null;
   if (mieterPdfOk && completionMieterPdf) {

@@ -89,7 +89,7 @@ function describeAbortError(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function extensionFor(mimeType: string, kind: BlobFtpsMediaKind): string {
+export function extensionFor(mimeType: string, kind: BlobFtpsMediaKind): string {
   const mime = mimeType.toLowerCase();
   if (mime.includes("pdf")) return ".pdf";
   if (mime.includes("jpeg") || mime.includes("jpg")) return ".jpg";
