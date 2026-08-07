@@ -625,10 +625,12 @@ body {
     }
 }
 
-/* Native Select: eigener Pfeil etwas einwärts, damit er gut tippbar bleibt. */
-#gebaeude-auswahl,
-#vermieter-auswahl,
-#completion-email-sender {
+/* Native Select: eigener grüner Pfeil, etwas einwärts, damit er gut tippbar
+   bleibt. Generisch für JEDES Auswahlfeld innerhalb eines .input-group
+   (statt einer festen ID-Liste) — sonst fehlt der Pfeil bei jedem neu
+   hinzugefügten Dropdown (z.B. "Anzahl der Schlüssel"), das nicht zufällig
+   eine der hier gelisteten IDs trägt. */
+.input-group select {
     appearance: none;
     -webkit-appearance: none;
     -moz-appearance: none;
