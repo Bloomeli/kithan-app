@@ -20,11 +20,17 @@
 
 // Bump this string on future deploys to force clients to purge the old cache
 // and re-fetch everything fresh (App-Shell + Bundle).
-const CACHE_VERSION = "v3";
+const CACHE_VERSION = "v4";
 const CACHE_NAME = `kithan-app-${CACHE_VERSION}`;
 const SW_TAG = `[service-worker ${CACHE_VERSION}]`;
 
-const CORE_ASSETS = ["/", "/index.html", "/style.css", "/icons/icon-180.png"];
+// "/style.css" ist bewusst NICHT mehr enthalten: Vite bündelt das CSS beim
+// Build in eine gehashte Datei unter /assets/ (z.B. /assets/index-XYZ.css) —
+// eine eigenständige /style.css existiert im fertigen Build nicht mehr. Da
+// cache.addAll() beim ersten 404 den GESAMTEN Aufruf verwirft, sorgte der
+// alte, nicht mehr existierende Eintrag dafür, dass bei JEDEM Deploy auch
+// das Vor-Cachen von "/", "/index.html" und dem Icon stillschweigend fehlschlug.
+const CORE_ASSETS = ["/", "/index.html", "/icons/icon-180.png"];
 
 /**
  * The Vite build hashes JS/CSS bundle filenames (e.g. /assets/index-abc123.js),
@@ -32,11 +38,17 @@ const CORE_ASSETS = ["/", "/index.html", "/style.css", "/icons/icon-180.png"];
  * cache whatever /assets/* and /icons/* files it actually references.
  */
 async function precacheCoreAssets(cache) {
-  await cache.addAll(CORE_ASSETS).catch((error) => {
-    // Best-effort — the runtime fetch handler below will still cache assets
-    // opportunistically as they're requested during normal use.
-    console.warn(`${SW_TAG} precache of CORE_ASSETS failed (non-fatal)`, error);
-  });
+  // Request-Objekte mit cache:"no-store" statt bloßer URL-Strings, damit
+  // dieser Precache-Schritt garantiert am HTTP-Cache des Geräts/der WKWebView
+  // vorbeigeht und wirklich den aktuellen Serverstand holt (siehe
+  // needsNoStore() weiter unten für die identische Begründung).
+  await cache
+    .addAll(CORE_ASSETS.map((url) => new Request(url, { cache: "no-store" })))
+    .catch((error) => {
+      // Best-effort — the runtime fetch handler below will still cache assets
+      // opportunistically as they're requested during normal use.
+      console.warn(`${SW_TAG} precache of CORE_ASSETS failed (non-fatal)`, error);
+    });
 
   try {
     const response = await fetch("/index.html", { cache: "no-store" });
@@ -114,6 +126,22 @@ function shouldBypassCache(request, url) {
   return false;
 }
 
+/**
+ * Für Navigationen (HTML) und index.html/service-worker.js selbst MUSS die
+ * Netzwerk-Anfrage garantiert am HTTP-Cache des Geräts vorbei — sonst kann
+ * eine iOS/WKWebView-"Zum Home-Bildschirm"-App (bekannt aggressiveres/
+ * inkonsistenteres HTTP-Caching als Desktop-Safari) einen veralteten Stand
+ * aus ihrem eigenen, für den Service Worker unsichtbaren HTTP-Cache liefern
+ * — der Service Worker selbst hält das fälschlich für eine "frische"
+ * Netzwerk-Antwort. Genau das kann zu einem gemischten Stand führen (z.B.
+ * neues JS, aber veraltetes CSS/HTML), obwohl online. Für die inhaltsbasiert
+ * gehashten /assets/*-Dateien ist normales HTTP-Caching dagegen unbedenklich
+ * und sogar erwünscht (eine bestimmte Hash-URL ändert nie ihren Inhalt).
+ */
+function needsNoStore(url, isNavigation) {
+  return isNavigation || url.pathname === "/index.html" || url.pathname === "/service-worker.js";
+}
+
 self.addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
@@ -126,9 +154,18 @@ self.addEventListener("fetch", (event) => {
   }
 
   const isNavigation = request.mode === "navigate";
+  // Requests with mode "navigate" can't be re-constructed via `new
+  // Request()` with an explicit cache override (the Fetch spec forces a
+  // silent fallback to mode "same-origin" in that case) — fetching by plain
+  // URL string instead sidesteps that entirely and is just as effective
+  // here, since we only need the *response*, not a faithful navigate-mode
+  // request against the network.
+  const networkFetch = needsNoStore(url, isNavigation)
+    ? fetch(url.href, { cache: "no-store", credentials: "same-origin" })
+    : fetch(request);
 
   event.respondWith(
-    fetch(request)
+    networkFetch
       .then((response) => {
         if (response && response.ok) {
           const copy = response.clone();
