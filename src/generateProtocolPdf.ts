@@ -322,7 +322,7 @@ export function generateAndDownloadProtocolPdf(input: ProtocolPdfInput): Protoco
   return { filename, base64 };
 }
 
-export function generateAndDownloadSchluesselPdf(input: SchluesselPdfInput): void {
+export function generateAndDownloadSchluesselPdf(input: SchluesselPdfInput): { filename: string; base64: string } {
   const writer = new PdfWriter();
 
   writer.addTitle(`Protokoll ${input.protokollartLabel} – Schlüssel`);
@@ -349,5 +349,15 @@ export function generateAndDownloadSchluesselPdf(input: SchluesselPdfInput): voi
 
   writeSignatureSection(writer, input);
 
-  writer.getDocument().save(buildSchluesselFilename(input));
+  const filename = buildSchluesselFilename(input);
+  const doc = writer.getDocument();
+  const dataUri = doc.output("datauristring") as string;
+  const comma = dataUri.indexOf(",");
+  const base64 = comma >= 0 ? dataUri.slice(comma + 1) : dataUri;
+  // Bewusst KEIN doc.save(filename) — siehe identische Begründung bei
+  // generateAndDownloadProtocolPdf oben: öffnet auf iOS/iPadOS-PWA Safaris
+  // Vollbild-PDF-Vorschau und unterbricht dadurch den direkt danach
+  // startenden Server-Upload. Das PDF existiert nur noch als Base64 im
+  // Speicher, für den FTPS-Upload und den Mieter-E-Mail-Versand.
+  return { filename, base64 };
 }

@@ -13,6 +13,8 @@ export interface ProtocolArchiveUploadInput {
   sessionKey: string;
   pdfFilename: string;
   pdfBase64: string;
+  /** Vorgangs-Ordner auf dem Firmenserver, z.B. "2026/Privat/Übergabe" (siehe getOrCreateVorgangId/requestVorgangsnummer in app.ts). Ohne Angabe: bisheriges flaches Basisverzeichnis. */
+  pdfRemoteSubdir?: string;
 }
 
 export interface ProtocolArchiveUploadResult {
@@ -28,7 +30,11 @@ function remoteConfigured(): boolean {
   return MEDIA_CONFIG.uploadTarget.kind !== "local-only";
 }
 
-async function uploadPdfToServer(filename: string, pdfBase64: string): Promise<boolean> {
+async function uploadPdfToServer(
+  filename: string,
+  pdfBase64: string,
+  remoteSubdir: string | undefined
+): Promise<boolean> {
   console.log(`[protocol-archive] Starting PDF upload (filename=${filename}, base64Length=${pdfBase64.length})`);
 
   if (!pdfBase64) {
@@ -66,6 +72,7 @@ async function uploadPdfToServer(filename: string, pdfBase64: string): Promise<b
     mimeType: "application/pdf",
     blob,
     filename: filename.replace(/[^\w.\-äöüÄÖÜß ()]+/g, "_").slice(0, 150),
+    remoteSubdir,
   });
 
   if (!result.ok) {
@@ -166,7 +173,7 @@ export async function uploadProtocolArchive(
   );
   const pdfStartedAt = Date.now();
   try {
-    result.pdfUploaded = await uploadPdfToServer(input.pdfFilename, input.pdfBase64);
+    result.pdfUploaded = await uploadPdfToServer(input.pdfFilename, input.pdfBase64, input.pdfRemoteSubdir);
     console.log(
       `[protocol-archive] PDF-Upload erfolgreich nach ${Math.round((Date.now() - pdfStartedAt) / 1000)}s (Gesamtdauer seit Start: ${elapsedSec()}s).`
     );

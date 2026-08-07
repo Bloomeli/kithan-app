@@ -26,6 +26,14 @@ export interface BlobFtpsUploadInput {
   blob: Blob;
   /** Explicit remote filename (used for the PDF, which already has a final name). */
   filename?: string;
+  /**
+   * Optionaler Unterordner-Pfad relativ zum FTPS-Basisverzeichnis (z.B.
+   * "2026/Privat/Übergabe"), in dem die Datei abgelegt werden soll. Wird
+   * serverseitig (api/ftps-transfer.ts) per ensureDir automatisch angelegt,
+   * falls er noch nicht existiert. Ohne Angabe: bisheriges flaches
+   * Basisverzeichnis (unverändertes Verhalten für Fotos/Videos).
+   */
+  remoteSubdir?: string;
 }
 
 export interface BlobFtpsUploadResult {
@@ -345,6 +353,7 @@ async function runUploadViaBlobAndFtps(input: BlobFtpsUploadInput): Promise<Blob
         blobUrl: blobResult.url,
         filename: remoteFilename,
         kind: input.kind,
+        remoteSubdir: input.remoteSubdir,
       }),
       signal: ftpsTimeout.signal,
     });

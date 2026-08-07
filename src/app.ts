@@ -17,6 +17,7 @@ import {
 import { sendProtocolEmail } from "./sendProtocolEmail";
 import { uploadProtocolArchive, type ProtocolArchiveUploadResult } from "./protocolArchiveUpload";
 import { acquireUploadWakeLock, releaseUploadWakeLock } from "./wakeLock";
+import { requestVorgangsnummer } from "./vorgangsnummer";
 
 type Objektart = "schluessel" | "gewerbe" | "privat" | "garage";
 type Protokollart = "uebergabe" | "ruecknahme";
@@ -2957,9 +2958,26 @@ function completionKindLabel(protokollart: Protokollart): string {
   return protokollart === "uebergabe" ? "Übergabe" : "Rücknahme";
 }
 
+/**
+ * Vorgangs-Ordner auf dem Firmenserver, z.B. "2026/Privat/Übergabe" —
+ * verwendet die bereits vorhandenen App-Bezeichnungen (OBJEKTART_LABELS/
+ * PROTOKOLLART_LABELS), keine neuen Kürzel. "jahr" kommt vom Server (siehe
+ * requestVorgangsnummer), nicht vom Client berechnet, damit Ordnerpfad und
+ * Zähler-Datei garantiert dasselbe Jahr verwenden.
+ */
+function buildVorgangRemoteSubdir(objektart: Objektart, protokollart: Protokollart, jahr: number): string {
+  return `${jahr}/${OBJEKTART_LABELS[objektart]}/${PROTOKOLLART_LABELS[protokollart]}`;
+}
+
+/** z.B. "0027_Müller_WH07.pdf" — Feinschliff (Zeichen, Länge) übernimmt sanitizeFilename auf dem Server. */
+function buildVorgangPdfFilename(vorgangsnummer: string, mietername: string, wohnungEinheit: string): string {
+  const parts = [vorgangsnummer, mietername.trim(), wohnungEinheit.trim()].filter((part) => part.length > 0);
+  return `${parts.join("_")}.pdf`;
+}
+
 /** After abschließen: hide Kopfdaten/Räume/Unterschrift; keep only completion UI + footer buttons. */
-function setProtocolFormBodyHidden(hidden: boolean): void {
-  Array.from(formStandard.children).forEach((child) => {
+function setProtocolFormBodyHidden(container: HTMLElement, hidden: boolean): void {
+  Array.from(container.children).forEach((child) => {
     if (!(child instanceof HTMLElement)) {
       return;
     }
@@ -3062,15 +3080,17 @@ function renderMieterEmailSection(parent: HTMLElement, mieterPdfOk: boolean): vo
  * Banner + E-Mail-Bereich ganz oben im Formular (nach Abschluss aller Übertragungen).
  */
 function renderCompletionTop(
+  container: HTMLElement,
   protokollart: Protokollart,
   archiveResult: ProtocolArchiveUploadResult | null,
-  mieterPdfOk: boolean
+  mieterPdfOk: boolean,
+  vorgangsnummer: string | null
 ): void {
   let top = document.getElementById("protocol-completion-top");
   if (!top) {
     top = document.createElement("div");
     top.id = "protocol-completion-top";
-    formStandard.insertBefore(top, formStandard.firstChild);
+    container.insertBefore(top, container.firstChild);
   }
   top.innerHTML = "";
 
@@ -3122,8 +3142,15 @@ function renderCompletionTop(
   }
   top.appendChild(banner);
 
+  if (vorgangsnummer) {
+    const vorgangsnummerLine = document.createElement("p");
+    vorgangsnummerLine.className = "protocol-completion-vorgangsnummer";
+    vorgangsnummerLine.textContent = `Vorgangsnummer: ${vorgangsnummer}`;
+    top.appendChild(vorgangsnummerLine);
+  }
+
   renderMieterEmailSection(top, mieterPdfOk);
-  setProtocolFormBodyHidden(true);
+  setProtocolFormBodyHidden(container, true);
   top.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -3275,7 +3302,7 @@ async function finishProtocolAsPdf(): Promise<void> {
   waiting.textContent = `${kind} wird abgeschlossen… PDF, Fotos und Videos werden übertragen. Bitte warten.`;
   top.appendChild(waiting);
   // Hide the filled-in form immediately — only waiting banner (+ later email) stays.
-  setProtocolFormBodyHidden(true);
+  setProtocolFormBodyHidden(formStandard, true);
   top.scrollIntoView({ behavior: "smooth", block: "start" });
 
   let mieterPdfOk = false;
@@ -3311,7 +3338,38 @@ async function finishProtocolAsPdf(): Promise<void> {
   // Upload keine Medien.
   const sessionKey = getOrCreateVorgangId(context.objektart, context.protokollart);
   let archiveResult: ProtocolArchiveUploadResult | null = null;
+  let vorgangsnummer: string | null = null;
   if (mieterPdfOk && completionMieterPdf) {
+    // Vorgangsnummer + Ordnerpfad VOR dem Upload anfordern, da der finale
+    // PDF-Dateiname die Nummer bereits enthalten soll (z.B.
+    // "0027_Müller_WH07.pdf" in "2026/Privat/Übergabe/"). Anders als bei
+    // Fotos/Videos (die unverändert sofort bei der Aufnahme hochgeladen
+    // werden) ist das hier ein bewusster Kompromiss: schlägt der PDF-Upload
+    // danach doch fehl, wurde die Nummer trotzdem bereits verbraucht — das
+    // nehmen wir in Kauf, da der Dateiname sonst nicht mit der Nummer
+    // übereinstimmen könnte. Schlägt schon die Nummern-Anfrage selbst fehl
+    // (z.B. offline), wird ohne Nummer und im bisherigen, flachen Ordner
+    // hochgeladen (kein Blockieren, kein Datenverlust).
+    let pdfFilename = completionMieterPdf.filename;
+    let pdfRemoteSubdir: string | undefined;
+    const numberResult = await requestVorgangsnummer(sessionKey, context.objektart);
+    if (numberResult.ok && numberResult.vorgangsnummer && numberResult.jahr) {
+      vorgangsnummer = numberResult.vorgangsnummer;
+      pdfFilename = buildVorgangPdfFilename(
+        vorgangsnummer,
+        form.kopfdaten.mietername,
+        form.kopfdaten.wohnungsnummerLage
+      );
+      pdfRemoteSubdir = buildVorgangRemoteSubdir(context.objektart, context.protokollart, numberResult.jahr);
+      console.log(
+        `[finishProtocolAsPdf] Vorgangsnummer vergeben: ${vorgangsnummer} -> ${pdfRemoteSubdir}/${pdfFilename}`
+      );
+    } else {
+      console.warn(
+        `[finishProtocolAsPdf] Vorgangsnummer konnte nicht vergeben werden (${numberResult.error}) — Upload läuft ohne Nummer im bisherigen Ordner weiter.`
+      );
+    }
+
     // Verhindert, dass der Bildschirm während der (potenziell mehrminütigen,
     // nacheinander laufenden) Foto-/Video-/PDF-Übertragung automatisch sperrt.
     // Ein Bildschirm-Sperren mitten im Upload kann iOS dazu bringen, die
@@ -3323,8 +3381,9 @@ async function finishProtocolAsPdf(): Promise<void> {
     try {
       archiveResult = await uploadProtocolArchive({
         sessionKey,
-        pdfFilename: completionMieterPdf.filename,
+        pdfFilename,
         pdfBase64: completionMieterPdf.base64,
+        pdfRemoteSubdir,
       });
       console.log(
         `[finishProtocolAsPdf] uploadProtocolArchive result (nach ${Math.round((Date.now() - uploadStartedAt) / 1000)}s):`,
@@ -3343,52 +3402,124 @@ async function finishProtocolAsPdf(): Promise<void> {
   }
 
   // Only after all transfers finished: final message + email section (no form body).
-  renderCompletionTop(context.protokollart, archiveResult, mieterPdfOk);
+  renderCompletionTop(formStandard, context.protokollart, archiveResult, mieterPdfOk, vorgangsnummer);
 }
 
-function clearCurrentSessionDraft(): void {
-  const context = getCurrentFormContext();
-  if (!context) {
-    return;
-  }
-  localStorage.removeItem(formDraftKey(context.objektart, context.protokollart));
-  // Vorgangs-ID mitsamt ihren Medien (Fotos/Videos) löschen, damit der
-  // nächste Vorgang mit demselben Objektart+Protokollart eine frische,
-  // eindeutige ID erhält statt versehentlich Medien wiederzuverwenden.
-  const vorgangKey = vorgangIdKey(context.objektart, context.protokollart);
-  const vorgangId = localStorage.getItem(vorgangKey);
-  localStorage.removeItem(vorgangKey);
-  if (vorgangId) {
-    void deleteMediaForSession(vorgangId).catch((error) => console.error(error));
-  }
-}
-
-function finishSchluesselAsPdf(): void {
+async function finishSchluesselAsPdf(): Promise<void> {
   const context = getCurrentFormContext();
   if (!context || context.objektart !== "schluessel") {
     showDraftStatus("PDF-Export ist nur für das Schlüssel-Formular verfügbar.", true);
     return;
   }
 
-  persistSchluesselFromDom();
-  const form = loadFormDraft(context.objektart, context.protokollart);
-
-  try {
-    generateAndDownloadSchluesselPdf(buildSchluesselPdfInput(context.protokollart, form));
-  } catch (error) {
-    console.error(error);
-    showDraftStatus("PDF konnte nicht erzeugt werden.", true);
+  const form = syncCurrentFormToSessionDraft();
+  if (!form) {
+    showDraftStatus("Formular konnte nicht gelesen werden.", true);
     return;
   }
 
-  clearCurrentSessionDraft();
-  clearKopfdatenFields();
-  resetSignatureUiState();
-  localStorage.removeItem(STORAGE_KEYS.objektart);
-  localStorage.removeItem(STORAGE_KEYS.protokollart);
-  setAppSubtitle(DEFAULT_SUBTITLE, false);
-  setAppTitleVisible(true);
-  showOnly(viewObjektart);
+  // Keep / refresh entry in „Meine Entwürfe“ — do not clear on abschließen
+  // (gleiches Verhalten wie beim Standard-Formular, siehe finishProtocolAsPdf).
+  upsertCompletionNamedDraft(context, form);
+  syncCurrentFormToSessionDraft();
+
+  const finishButton = schluesselSignatureContainer.querySelector(
+    ".btn-finish-pdf"
+  ) as HTMLButtonElement | null;
+  if (finishButton) {
+    finishButton.disabled = true;
+  }
+
+  hideDraftStatus();
+  let top = document.getElementById("protocol-completion-top");
+  if (!top) {
+    top = document.createElement("div");
+    top.id = "protocol-completion-top";
+    formSchluessel.insertBefore(top, formSchluessel.firstChild);
+  }
+  top.innerHTML = "";
+  const waiting = document.createElement("p");
+  waiting.className = "protocol-completion-banner";
+  waiting.textContent = "Schlüsselübergabe wird abgeschlossen… PDF wird übertragen. Bitte warten.";
+  top.appendChild(waiting);
+  // Hide the filled-in form immediately — only waiting banner (+ later email) stays.
+  setProtocolFormBodyHidden(formSchluessel, true);
+  top.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  let mieterPdfOk = false;
+  console.log("[finishSchluesselAsPdf] PDF generation started");
+  try {
+    completionMieterPdf = generateAndDownloadSchluesselPdf(buildSchluesselPdfInput(context.protokollart, form));
+    mieterPdfOk = true;
+    console.log(
+      `[finishSchluesselAsPdf] PDF generated successfully (filename=${completionMieterPdf.filename}, base64Length=${completionMieterPdf.base64.length})`
+    );
+  } catch (error) {
+    console.error("[finishSchluesselAsPdf] PDF generation FAILED — archive upload will be skipped entirely:", {
+      errorName: error instanceof Error ? error.name : typeof error,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      errorStack: error instanceof Error ? error.stack : undefined,
+      rawError: error,
+    });
+    completionMieterPdf = null;
+    mieterPdfOk = false;
+  }
+
+  // Muss exakt der Schlüssel sein, unter dem etwaige Medien beim Aufnehmen
+  // gespeichert wurden (siehe getMediaSessionKey) — das Schlüssel-Formular
+  // erfasst aktuell keine Fotos/Videos, uploadProtocolArchive lädt dann
+  // schlicht 0 Fotos/0 Videos hoch und fährt direkt mit dem PDF fort.
+  const sessionKey = getOrCreateVorgangId(context.objektart, context.protokollart);
+  let archiveResult: ProtocolArchiveUploadResult | null = null;
+  let vorgangsnummer: string | null = null;
+  if (mieterPdfOk && completionMieterPdf) {
+    let pdfFilename = completionMieterPdf.filename;
+    let pdfRemoteSubdir: string | undefined;
+    const numberResult = await requestVorgangsnummer(sessionKey, context.objektart);
+    if (numberResult.ok && numberResult.vorgangsnummer && numberResult.jahr) {
+      vorgangsnummer = numberResult.vorgangsnummer;
+      pdfFilename = buildVorgangPdfFilename(
+        vorgangsnummer,
+        form.schluessel?.mietername ?? "",
+        form.schluessel?.wohnungEinheit ?? ""
+      );
+      pdfRemoteSubdir = buildVorgangRemoteSubdir(context.objektart, context.protokollart, numberResult.jahr);
+      console.log(
+        `[finishSchluesselAsPdf] Vorgangsnummer vergeben: ${vorgangsnummer} -> ${pdfRemoteSubdir}/${pdfFilename}`
+      );
+    } else {
+      console.warn(
+        `[finishSchluesselAsPdf] Vorgangsnummer konnte nicht vergeben werden (${numberResult.error}) — Upload läuft ohne Nummer im bisherigen Ordner weiter.`
+      );
+    }
+
+    await acquireUploadWakeLock();
+    const uploadStartedAt = Date.now();
+    try {
+      archiveResult = await uploadProtocolArchive({
+        sessionKey,
+        pdfFilename,
+        pdfBase64: completionMieterPdf.base64,
+        pdfRemoteSubdir,
+      });
+      console.log(
+        `[finishSchluesselAsPdf] uploadProtocolArchive result (nach ${Math.round((Date.now() - uploadStartedAt) / 1000)}s):`,
+        archiveResult
+      );
+    } catch (error) {
+      console.error("[finishSchluesselAsPdf] uploadProtocolArchive threw unexpectedly:", error);
+      archiveResult = null;
+    } finally {
+      await releaseUploadWakeLock();
+    }
+  } else {
+    console.warn(
+      "[finishSchluesselAsPdf] Skipping uploadProtocolArchive entirely — mieterPdfOk is false (see PDF generation error above)."
+    );
+  }
+
+  // Only after all transfers finished: final message + email section (no form body).
+  renderCompletionTop(formSchluessel, context.protokollart, archiveResult, mieterPdfOk, vorgangsnummer);
 }
 
 function renderSignatureSection(
@@ -3839,6 +3970,8 @@ function showFormular(objektart: Objektart, protokollart: Protokollart): void {
   if (objektart === "schluessel") {
     formStandard.classList.add("hidden");
     formSchluessel.classList.remove("hidden");
+    document.getElementById("protocol-completion-top")?.remove();
+    setProtocolFormBodyHidden(formSchluessel, false);
     // showOnly() BEFORE building the signature section: renderSignatureSection()
     // constructs signature <canvas> elements and restores saved signature
     // images onto them — while the view container is still hidden (display:
@@ -3852,14 +3985,16 @@ function showFormular(objektart: Objektart, protokollart: Protokollart): void {
     if (!draft.schluessel) {
       persistSchluesselFromDom();
     }
-    renderSignatureSection(schluesselSignatureContainer, "schluessel", finishSchluesselAsPdf);
+    renderSignatureSection(schluesselSignatureContainer, "schluessel", finishSchluesselAsPdf, {
+      finishLabel: protokollart === "uebergabe" ? "Übergabe abschließen" : "Rücknahme abschließen",
+    });
     return;
   }
 
   formSchluessel.classList.add("hidden");
   formStandard.classList.remove("hidden");
   document.getElementById("protocol-completion-top")?.remove();
-  setProtocolFormBodyHidden(false);
+  setProtocolFormBodyHidden(formStandard, false);
   // See comment above the schluessel branch — showOnly() must run before any
   // signature <canvas> is constructed/restored.
   showOnly(viewFormular);

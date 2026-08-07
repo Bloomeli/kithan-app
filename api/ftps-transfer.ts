@@ -36,6 +36,8 @@ interface TransferBody {
   blobUrl?: string;
   filename?: string;
   kind?: string;
+  /** Optionaler Unterordner-Pfad relativ zum Basisverzeichnis, z.B. "2026/Privat/Übergabe". */
+  remoteSubdir?: string;
 }
 
 function getEnv(name: string): string {
@@ -54,6 +56,30 @@ function sanitizeFilename(value: string, fallback: string): string {
   return cleaned.slice(0, 150) || fallback;
 }
 
+/**
+ * Baut das vollständige Zielverzeichnis aus dem Basisverzeichnis + einem
+ * optionalen, vom Client mitgegebenen Unterordner-Pfad (z.B.
+ * "2026/Privat/Übergabe" für einen Vorgangs-Ordner). Jedes Pfadsegment wird
+ * einzeln bereinigt (gleiche erlaubte Zeichen wie bei Dateinamen, siehe
+ * sanitizeFilename) — kein "..", kein Verlassen des Basisverzeichnisses.
+ */
+function buildRemoteDir(baseDir: string, remoteSubdir: string | undefined): string {
+  const base = baseDir.replace(/\/+$/, "");
+  if (!remoteSubdir) {
+    return base;
+  }
+  const segments = remoteSubdir
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0 && segment !== "." && segment !== "..")
+    .map((segment) => sanitizeFilename(segment, ""))
+    .filter((segment) => segment.length > 0);
+  if (segments.length === 0) {
+    return base;
+  }
+  return `${base}/${segments.join("/")}`;
+}
+
 function isAllowedBlobUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
@@ -63,12 +89,17 @@ function isAllowedBlobUrl(url: string): boolean {
   }
 }
 
-async function uploadOverFtps(buffer: Buffer, remoteFileName: string): Promise<string> {
+async function uploadOverFtps(
+  buffer: Buffer,
+  remoteFileName: string,
+  remoteSubdir: string | undefined
+): Promise<string> {
   const host = getEnv("FTPS_HOST");
   const user = getEnv("FTPS_USER");
   const password = getEnv("FTPS_PASSWORD");
   const port = Number(process.env.FTPS_PORT?.trim() || DEFAULT_PORT);
-  const remoteDir = process.env.FTPS_REMOTE_DIR?.trim() || DEFAULT_REMOTE_DIR;
+  const baseRemoteDir = process.env.FTPS_REMOTE_DIR?.trim() || DEFAULT_REMOTE_DIR;
+  const remoteDir = buildRemoteDir(baseRemoteDir, remoteSubdir);
   // Many on-prem Windows FTPS servers use a self-signed certificate; only
   // enforce strict verification when explicitly opted in via env var.
   const rejectUnauthorized = process.env.FTPS_REJECT_UNAUTHORIZED === "true";
@@ -109,13 +140,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     const blobUrl = String(body.blobUrl ?? "").trim();
     const kind = String(body.kind ?? "file").trim() || "file";
     const filename = sanitizeFilename(String(body.filename ?? ""), `${kind}-${Date.now()}`);
+    const remoteSubdir = typeof body.remoteSubdir === "string" ? body.remoteSubdir : undefined;
 
     if (!blobUrl || !isAllowedBlobUrl(blobUrl)) {
       res.status(400).json({ ok: false, error: "Ungültige oder fehlende Blob-URL." });
       return;
     }
 
-    console.log(`[ftps-transfer] request received: kind=${kind} filename=${filename}`);
+    console.log(
+      `[ftps-transfer] request received: kind=${kind} filename=${filename} remoteSubdir=${remoteSubdir ?? "(keiner)"}`
+    );
 
     let buffer: Buffer;
     try {
@@ -133,7 +167,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
 
     let remotePath: string;
     try {
-      remotePath = await uploadOverFtps(buffer, filename);
+      remotePath = await uploadOverFtps(buffer, filename, remoteSubdir);
     } catch (error) {
       const message = error instanceof Error ? error.message : "FTPS-Übertragung fehlgeschlagen.";
       console.error("[ftps-transfer] FTPS upload failed", message);

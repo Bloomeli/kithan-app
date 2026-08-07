@@ -850,6 +850,14 @@ body {
     color: var(--neon-purple);
 }
 
+.protocol-completion-vorgangsnummer {
+    margin: -8px 0 20px;
+    font-size: 0.9rem;
+    letter-spacing: 0.02em;
+    color: var(--neon-green);
+    opacity: 0.85;
+}
+
 .protocol-email-status.is-ok {
     color: var(--neon-green);
 }
