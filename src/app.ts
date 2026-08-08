@@ -767,6 +767,12 @@ function persistClosing(): void {
 }
 
 function clearAllFormDrafts(): void {
+  // Schritt 9: Fotos/Videos eines Vorgangs, der noch als benannter Entwurf
+  // ("Meine Entwürfe") existiert, dürfen durch "Neustart (Abbrechen)" NICHT
+  // gelöscht werden — nur der "aktive Slot"-Zeiger wird zurückgesetzt, damit
+  // der nächste neue Vorgang eine frische Vorgangs-ID bekommt.
+  const protectedVorgangIds = new Set(loadNamedDrafts().map((draft) => draft.vorgangId));
+
   const keysToRemove: string[] = [];
   const vorgangKeysToRemove: string[] = [];
   for (let i = 0; i < localStorage.length; i += 1) {
@@ -783,7 +789,7 @@ function clearAllFormDrafts(): void {
   vorgangKeysToRemove.forEach((key) => {
     const vorgangId = localStorage.getItem(key);
     localStorage.removeItem(key);
-    if (vorgangId) {
+    if (vorgangId && !protectedVorgangIds.has(vorgangId)) {
       void deleteMediaForSession(vorgangId).catch((error) => console.error(error));
     }
   });
@@ -819,7 +825,25 @@ interface NamedProtocolDraft {
   objektart: Objektart;
   protokollart: Protokollart;
   form: FormDraft;
+  /**
+   * Eigene, unveränderliche Vorgangs-ID für Fotos/Videos GENAU dieses
+   * Entwurfs (Schritt 9 des Architekturplans). Bewusst getrennt vom
+   * "aktuellen Slot" (siehe vorgangIdKey) — sonst könnten zwei gespeicherte
+   * Entwürfe derselben Objektart+Protokollart (z.B. zwei offene "Privat/
+   * Übergabe" für unterschiedliche Mieter) versehentlich dieselben Fotos
+   * teilen, oder ein "Neustart" könnte die Fotos eines noch gespeicherten
+   * Entwurfs löschen. Wird beim Öffnen (openNamedDraft) auf den aktiven
+   * Slot übertragen, damit Aufnahme/Anzeige weiter über den bestehenden,
+   * unveränderten Mechanismus (getMediaSessionKey) läuft.
+   */
+  vorgangId: string;
 }
+
+/** Entwürfe von vor Einführung der eigenen Vorgangs-ID (Schritt 9) haben noch kein vorgangId-Feld. */
+type LegacyNamedProtocolDraft = Omit<NamedProtocolDraft, "protokollart" | "vorgangId"> & {
+  protokollart: LegacyProtokollart;
+  vorgangId?: string;
+};
 
 function loadNamedDrafts(): NamedProtocolDraft[] {
   const raw = localStorage.getItem(STORAGE_KEYS.namedDrafts);
@@ -827,29 +851,56 @@ function loadNamedDrafts(): NamedProtocolDraft[] {
     return [];
   }
   try {
-    const parsed = JSON.parse(raw) as Array<NamedProtocolDraft & { protokollart: LegacyProtokollart }>;
+    const parsed = JSON.parse(raw) as LegacyNamedProtocolDraft[];
     if (!Array.isArray(parsed)) {
       return [];
     }
 
     let changed = false;
-    const drafts = parsed.flatMap((item) => {
-      const rawProtokollart = item.protokollart as LegacyProtokollart;
+    const drafts: NamedProtocolDraft[] = [];
+    parsed.forEach((item) => {
+      const rawProtokollart = item.protokollart;
       const protokollart = normalizeProtokollart(rawProtokollart);
       if (!protokollart || !isObjektart(item.objektart)) {
-        return [];
+        return;
       }
       if (rawProtokollart === "abnahme") {
         changed = true;
       }
-      return [
-        {
-          ...item,
-          name: typeof item.name === "string" ? item.name : "",
-          objektart: item.objektart,
-          protokollart,
-        },
-      ];
+      drafts.push({
+        ...item,
+        name: typeof item.name === "string" ? item.name : "",
+        objektart: item.objektart,
+        protokollart,
+        vorgangId: item.vorgangId ?? "",
+      });
+    });
+
+    // Migration (Schritt 9): Entwürfe ohne eigene Vorgangs-ID (leerer String)
+    // bekommen jetzt eine — je Objektart+Protokollart-"Slot" übernimmt
+    // bevorzugt der zuletzt bearbeitete Entwurf die dort aktuell aktive
+    // Vorgangs-ID (höchste Chance, seine echten, schon vorhandenen Fotos/
+    // Videos wiederzufinden). Alle älteren Entwürfe desselben Slots bekommen
+    // stattdessen eine frische, leere Vorgangs-ID, statt möglicherweise
+    // fälschlich die Fotos eines anderen Entwurfs zu übernehmen. Bereits vor
+    // dieser Änderung durch "Neustart" gelöschte Fotos können dadurch nicht
+    // rückwirkend wiederhergestellt werden.
+    const legacyBySlot = new Map<string, NamedProtocolDraft[]>();
+    drafts
+      .filter((draft) => draft.vorgangId === "")
+      .forEach((draft) => {
+        const slot = `${draft.objektart}_${draft.protokollart}`;
+        const list = legacyBySlot.get(slot) ?? [];
+        list.push(draft);
+        legacyBySlot.set(slot, list);
+      });
+    legacyBySlot.forEach((list) => {
+      list.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      list.forEach((draft, index) => {
+        draft.vorgangId =
+          index === 0 ? getOrCreateVorgangId(draft.objektart, draft.protokollart) : generateId("vorgang");
+        changed = true;
+      });
     });
 
     if (changed) {
@@ -1122,6 +1173,7 @@ function saveCurrentAsNamedDraft(): void {
     objektart: context.objektart,
     protokollart: context.protokollart,
     form: JSON.parse(JSON.stringify(form)) as FormDraft,
+    vorgangId: getOrCreateVorgangId(context.objektart, context.protokollart),
   };
 
   drafts.unshift(named);
@@ -1136,6 +1188,12 @@ function openNamedDraft(draftId: string): void {
   }
 
   saveFormDraft(draft.objektart, draft.protokollart, JSON.parse(JSON.stringify(draft.form)) as FormDraft);
+  // Schritt 9: aktiven Slot auf die eigene Vorgangs-ID DIESES Entwurfs
+  // umbiegen, damit getMediaSessionKey() (unverändert) ab jetzt wieder genau
+  // die Fotos/Videos findet, die zu diesem Entwurf gehören — unabhängig
+  // davon, was im selben Objektart+Protokollart-Slot zwischenzeitlich sonst
+  // passiert ist (anderer Entwurf geöffnet, neuer Vorgang begonnen, ...).
+  localStorage.setItem(vorgangIdKey(draft.objektart, draft.protokollart), draft.vorgangId);
   localStorage.setItem(STORAGE_KEYS.objektart, draft.objektart);
   localStorage.setItem(STORAGE_KEYS.protokollart, draft.protokollart);
   hideDraftStatus();
@@ -3087,6 +3145,8 @@ function upsertCompletionNamedDraft(
       name,
       updatedAt: now,
       form: formCopy,
+      // vorgangId bleibt unverändert — dieser Eintrag existierte schon vorher
+      // (z.B. über "Als Entwurf speichern") und behält seine Medien-Zuordnung.
     };
   } else {
     drafts.unshift({
@@ -3097,6 +3157,7 @@ function upsertCompletionNamedDraft(
       objektart: context.objektart,
       protokollart: context.protokollart,
       form: formCopy,
+      vorgangId: getOrCreateVorgangId(context.objektart, context.protokollart),
     });
   }
 
