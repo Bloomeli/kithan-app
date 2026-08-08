@@ -34,6 +34,27 @@ export interface BlobFtpsUploadInput {
    * Basisverzeichnis (unverändertes Verhalten für Fotos/Videos).
    */
   remoteSubdir?: string;
+  /**
+   * Retry-ohne-Re-Upload: Wenn eine frühere Anfrage den Blob-Upload bereits
+   * erfolgreich abgeschlossen hatte und NUR der anschließende FTPS-Schritt
+   * fehlgeschlagen ist, kann hier die damals erhaltene Blob-URL übergeben
+   * werden. In diesem Fall wird der komplette Token-/PUT-Schritt
+   * übersprungen — die Datei wird NICHT erneut vom Gerät zu Vercel Blob
+   * hochgeladen — und es wird direkt mit der FTPS-Übertragung fortgefahren.
+   * Muss zusammen mit `existingRemoteFilename` übergeben werden (derselbe
+   * Dateiname wie beim ursprünglichen Upload-Versuch).
+   */
+  existingBlobUrl?: string;
+  existingRemoteFilename?: string;
+  /**
+   * Wird unmittelbar nach einem frisch erfolgreichen Blob-Upload aufgerufen
+   * (noch bevor die FTPS-Übertragung versucht wird), damit der Aufrufer die
+   * Blob-URL + den verwendeten Dateinamen persistieren kann (siehe
+   * `existingBlobUrl` oben) — falls der anschließende FTPS-Schritt
+   * fehlschlägt, kann ein späterer Retry dann ohne erneuten Blob-Upload
+   * ansetzen. Fehler in diesem Callback sind nicht fatal für den Upload.
+   */
+  onBlobUploaded?: (info: { blobUrl: string; remoteFilename: string }) => void | Promise<void>;
 }
 
 export interface BlobFtpsUploadResult {
@@ -248,94 +269,121 @@ export async function uploadViaBlobAndFtps(input: BlobFtpsUploadInput): Promise<
 
 async function runUploadViaBlobAndFtps(input: BlobFtpsUploadInput): Promise<BlobFtpsUploadResult> {
   const ext = extensionFor(input.mimeType, input.kind);
-  const remoteFilename = buildRemoteFilename(input, ext);
+  const remoteFilename = input.existingRemoteFilename?.trim() || buildRemoteFilename(input, ext);
   const blobPathname = `${input.kind}/${input.ownerKey}-${input.mediaId}${ext}`;
 
-  console.log(
-    `[blob-ftps-upload] UPLOAD_START kind=${input.kind} pathname=${blobPathname} bytes=${input.blob.size}`
-  );
+  let blobResult: { url: string };
 
-  let lastLoggedPercent = -1;
-  let blobResult;
-  const blobTimeout = timeoutSignal(
-    BLOB_UPLOAD_TIMEOUT_MS,
-    "Blob-Upload abgebrochen (Zeitüberschreitung — Netzwerkverbindung unterbrochen?)."
-  );
-  try {
-    let clientToken: string;
-    try {
-      clientToken = await fetchClientToken(blobPathname, blobTimeout.signal);
-      console.log(`[blob-ftps-upload] TOKEN_RECEIVED kind=${input.kind} pathname=${blobPathname}`);
-    } catch (error) {
-      const tokenErr = error instanceof TokenRequestError ? error : undefined;
-      console.error("[blob-ftps-upload] BLOB_UPLOAD_ERROR (token request failed, PUT was never attempted)", {
-        stage: "token",
-        kind: input.kind,
-        blobPathname,
-        errorName: error instanceof Error ? error.name : typeof error,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        errorStack: error instanceof Error ? error.stack : undefined,
-        httpStatus: tokenErr?.httpStatus,
-        httpStatusText: tokenErr?.httpStatusText,
-        responseBody: tokenErr?.responseBody,
-        rawError: error,
-      });
-      return {
-        ok: false,
-        error: describeAbortError(error, "Blob-Upload fehlgeschlagen (Zeitüberschreitung)."),
-      };
-    }
-
-    // Eindeutiger Log UNMITTELBAR VOR put() — Punkt 3.
+  if (input.existingBlobUrl) {
+    // Retry-ohne-Re-Upload: ein früherer Versuch hatte den Blob-Upload
+    // bereits erfolgreich abgeschlossen, nur die FTPS-Übertragung war
+    // fehlgeschlagen. Token-Anfrage + put() werden hier bewusst komplett
+    // übersprungen, damit die Datei NICHT erneut vom Gerät hochgeladen wird.
     console.log(
-      `[blob-ftps-upload] BLOB_UPLOAD_CALL kind=${input.kind} pathname=${blobPathname} ` +
-        `mimeType=${input.mimeType || "(leer)"} bytes=${input.blob.size} online=${navigator.onLine} ` +
-        `visibility=${document.visibilityState}`
+      `[blob-ftps-upload] RETRY_SKIP_BLOB_UPLOAD kind=${input.kind} pathname=${blobPathname} ` +
+        `(Blob-Upload war bereits erfolgreich, nur FTPS wird erneut versucht) url=${input.existingBlobUrl}`
+    );
+    blobResult = { url: input.existingBlobUrl };
+  } else {
+    console.log(
+      `[blob-ftps-upload] UPLOAD_START kind=${input.kind} pathname=${blobPathname} bytes=${input.blob.size}`
+    );
+
+    let lastLoggedPercent = -1;
+    const blobTimeout = timeoutSignal(
+      BLOB_UPLOAD_TIMEOUT_MS,
+      "Blob-Upload abgebrochen (Zeitüberschreitung — Netzwerkverbindung unterbrochen?)."
     );
     try {
-      blobResult = await put(blobPathname, input.blob, {
-        access: "public",
-        token: clientToken,
-        contentType: input.mimeType || undefined,
-        abortSignal: blobTimeout.signal,
-        onUploadProgress: ({ percentage }) => {
-          // Concrete proof bytes are actually moving (vs. the request never
-          // truly starting). Throttled to every ~20% to avoid log spam.
-          const bucket = Math.floor(percentage / 20) * 20;
-          if (bucket !== lastLoggedPercent) {
-            lastLoggedPercent = bucket;
-            console.log(`[blob-ftps-upload] upload progress ${percentage.toFixed(0)}%`);
-          }
-        },
-      });
-      // Eindeutiger Log UNMITTELBAR NACH put() — Punkt 3. (BLOB_UPLOAD_SUCCESS
-      // unten folgt erst nach dem finally-Block, dieser Log hier steht in der
-      // exakt selben try-Anweisung wie der put()-Aufruf, ohne jeden weiteren
-      // await dazwischen.)
-      console.log(`[blob-ftps-upload] PUT_RETURNED kind=${input.kind} url=${blobResult.url}`);
-    } catch (error) {
-      console.error("[blob-ftps-upload] BLOB_UPLOAD_ERROR (PUT to Vercel Blob failed)", {
-        stage: "put",
-        kind: input.kind,
-        blobPathname,
-        mimeType: input.mimeType,
-        blobSize: input.blob.size,
-        online: navigator.onLine,
-        visibility: document.visibilityState,
-        errorName: error instanceof Error ? error.name : typeof error,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        errorStack: error instanceof Error ? error.stack : undefined,
-        likelyCause: classifyPutError(error),
-        note: "put() von @vercel/blob/client legt bei Fehlern KEINEN rohen HTTP-Status/Response-Body offen (auf Safari/iOS läuft der PUT intern über XMLHttpRequest — dessen onerror liefert nur ein generisches 'Network request failed', ohne Grund). Prüfe zusätzlich Safaris EIGENE, native Konsolenausgabe (rote Zeilen, nicht von uns geloggt) für CORS/TLS/DNS-Details.",
-        rawError: error,
-      });
-      return {
-        ok: false,
-        error: describeAbortError(error, "Blob-Upload fehlgeschlagen (Zeitüberschreitung)."),
-      };
+      let clientToken: string;
+      try {
+        clientToken = await fetchClientToken(blobPathname, blobTimeout.signal);
+        console.log(`[blob-ftps-upload] TOKEN_RECEIVED kind=${input.kind} pathname=${blobPathname}`);
+      } catch (error) {
+        const tokenErr = error instanceof TokenRequestError ? error : undefined;
+        console.error("[blob-ftps-upload] BLOB_UPLOAD_ERROR (token request failed, PUT was never attempted)", {
+          stage: "token",
+          kind: input.kind,
+          blobPathname,
+          errorName: error instanceof Error ? error.name : typeof error,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          errorStack: error instanceof Error ? error.stack : undefined,
+          httpStatus: tokenErr?.httpStatus,
+          httpStatusText: tokenErr?.httpStatusText,
+          responseBody: tokenErr?.responseBody,
+          rawError: error,
+        });
+        return {
+          ok: false,
+          error: describeAbortError(error, "Blob-Upload fehlgeschlagen (Zeitüberschreitung)."),
+        };
+      }
+
+      // Eindeutiger Log UNMITTELBAR VOR put() — Punkt 3.
+      console.log(
+        `[blob-ftps-upload] BLOB_UPLOAD_CALL kind=${input.kind} pathname=${blobPathname} ` +
+          `mimeType=${input.mimeType || "(leer)"} bytes=${input.blob.size} online=${navigator.onLine} ` +
+          `visibility=${document.visibilityState}`
+      );
+      try {
+        blobResult = await put(blobPathname, input.blob, {
+          access: "public",
+          token: clientToken,
+          contentType: input.mimeType || undefined,
+          abortSignal: blobTimeout.signal,
+          onUploadProgress: ({ percentage }) => {
+            // Concrete proof bytes are actually moving (vs. the request never
+            // truly starting). Throttled to every ~20% to avoid log spam.
+            const bucket = Math.floor(percentage / 20) * 20;
+            if (bucket !== lastLoggedPercent) {
+              lastLoggedPercent = bucket;
+              console.log(`[blob-ftps-upload] upload progress ${percentage.toFixed(0)}%`);
+            }
+          },
+        });
+        // Eindeutiger Log UNMITTELBAR NACH put() — Punkt 3. (BLOB_UPLOAD_SUCCESS
+        // unten folgt erst nach dem finally-Block, dieser Log hier steht in der
+        // exakt selben try-Anweisung wie der put()-Aufruf, ohne jeden weiteren
+        // await dazwischen.)
+        console.log(`[blob-ftps-upload] PUT_RETURNED kind=${input.kind} url=${blobResult.url}`);
+      } catch (error) {
+        console.error("[blob-ftps-upload] BLOB_UPLOAD_ERROR (PUT to Vercel Blob failed)", {
+          stage: "put",
+          kind: input.kind,
+          blobPathname,
+          mimeType: input.mimeType,
+          blobSize: input.blob.size,
+          online: navigator.onLine,
+          visibility: document.visibilityState,
+          errorName: error instanceof Error ? error.name : typeof error,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          errorStack: error instanceof Error ? error.stack : undefined,
+          likelyCause: classifyPutError(error),
+          note: "put() von @vercel/blob/client legt bei Fehlern KEINEN rohen HTTP-Status/Response-Body offen (auf Safari/iOS läuft der PUT intern über XMLHttpRequest — dessen onerror liefert nur ein generisches 'Network request failed', ohne Grund). Prüfe zusätzlich Safaris EIGENE, native Konsolenausgabe (rote Zeilen, nicht von uns geloggt) für CORS/TLS/DNS-Details.",
+          rawError: error,
+        });
+        return {
+          ok: false,
+          error: describeAbortError(error, "Blob-Upload fehlgeschlagen (Zeitüberschreitung)."),
+        };
+      }
+    } finally {
+      blobTimeout.clear();
     }
-  } finally {
-    blobTimeout.clear();
+
+    // Aufrufer (siehe mediaService.ts) persistiert hier die Blob-URL, damit
+    // ein späterer Retry bei einem FTPS-Fehlschlag nicht erneut hochladen
+    // muss. Fehler hier sind bewusst nicht fatal für den laufenden Upload.
+    if (input.onBlobUploaded) {
+      try {
+        await input.onBlobUploaded({ blobUrl: blobResult.url, remoteFilename });
+      } catch (persistError) {
+        console.warn(
+          "[blob-ftps-upload] onBlobUploaded callback failed (non-fatal — retry-without-reupload optimization may not be available for this item)",
+          persistError
+        );
+      }
+    }
   }
 
   console.log(`[blob-ftps-upload] BLOB_UPLOAD_SUCCESS url=${blobResult.url}`);

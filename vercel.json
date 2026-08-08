@@ -11,8 +11,17 @@
     },
     "api/send-protocol-email.ts": {
       "maxDuration": 60
+    },
+    "api/cleanup-expired-blobs.ts": {
+      "maxDuration": 60
     }
   },
+  "crons": [
+    {
+      "path": "/api/cleanup-expired-blobs",
+      "schedule": "0 3 * * *"
+    }
+  ],
   "headers": [
     {
       "source": "/",

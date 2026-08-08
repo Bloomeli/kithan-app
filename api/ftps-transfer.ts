@@ -2,9 +2,16 @@
  * Holt eine zuvor per Vercel Blob hochgeladene Datei (Foto, Video oder PDF)
  * ab und überträgt sie per FTPS auf den Windows-Firmenserver.
  *
- * Bei Erfolg: Datei wird von Vercel Blob gelöscht (nur kurzer Zwischenstopp).
+ * Bei Erfolg: Datei wird NICHT sofort von Vercel Blob gelöscht. Stattdessen
+ * wird sie in ein kleines "Bestätigungsregister" eingetragen (eigene JSON-Datei
+ * im selben, bereits bestehenden Blob-Store — siehe appendToCleanupRegistry
+ * unten). Der tägliche Cron-Job (api/cleanup-expired-blobs.ts) löscht die
+ * Datei automatisch erst 5 Kalendertage nach dieser Bestätigung — bis dahin
+ * dient sie als temporäre Sicherheitskopie.
  * Bei Fehler: Datei bleibt bei Vercel Blob liegen, damit ein späterer
- * manueller Retry (Button „Erneut hochladen“) nichts verliert.
+ * manueller Retry (Button „Erneut hochladen“) nichts verliert. Sie wird in
+ * diesem Fall NICHT ins Bestätigungsregister eingetragen, kann also niemals
+ * durch die 5-Tage-Regel automatisch gelöscht werden.
  *
  * Zugangsdaten ausschließlich über Vercel-Umgebungsvariablen:
  *   FTPS_HOST, FTPS_PORT, FTPS_USER, FTPS_PASSWORD, FTPS_REMOTE_DIR
@@ -14,7 +21,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { Client } from "basic-ftp";
 import { Readable } from "node:stream";
-import { del } from "@vercel/blob";
+import { head, put, BlobNotFoundError, BlobPreconditionFailedError } from "@vercel/blob";
 
 function getBlobReadWriteToken(): string {
   const token = process.env.PUBLIC_BLOB_READ_WRITE_TOKEN;
@@ -22,6 +29,96 @@ function getBlobReadWriteToken(): string {
     throw new Error("Server-Konfiguration unvollstaendig (PUBLIC_BLOB_READ_WRITE_TOKEN fehlt).");
   }
   return token;
+}
+
+/**
+ * Bestätigungsregister für die 5-Tage-Cleanup-Regel (siehe
+ * api/cleanup-expired-blobs.ts). Eine kleine JSON-Datei pro Kalendertag
+ * (UTC) im selben, bereits bestehenden Blob-Store — kein neuer Store, keine
+ * neue Verbindung, kein manuell anzulegender Ordner nötig, das Programm legt
+ * diese Dateien selbst an. Gleiche Technik wie schon bei
+ * api/vorgangsnummer.ts (optimistisches Concurrency-Control per ETag/ifMatch),
+ * da mehrere Foto-/Video-/PDF-Bestätigungen am selben Tag gleichzeitig
+ * eintreffen können.
+ */
+const CLEANUP_REGISTRY_PREFIX = "blob-cleanup/pending-";
+const CLEANUP_REGISTRY_MAX_ATTEMPTS = 6;
+
+interface CleanupRegistryEntry {
+  blobUrl: string;
+  kind: string;
+  filename: string;
+  /** Epoch-Millisekunden — exakter Bestätigungszeitpunkt (FTPS-Erfolg). */
+  confirmedAt: number;
+}
+
+interface CleanupRegistryFile {
+  /** Kalendertag (UTC, YYYY-MM-DD) — nur informativ, dient der Dateibenennung. */
+  date: string;
+  entries: CleanupRegistryEntry[];
+}
+
+function cleanupRegistryPathnameForToday(): string {
+  const dateStr = new Date().toISOString().slice(0, 10); // UTC YYYY-MM-DD
+  return `${CLEANUP_REGISTRY_PREFIX}${dateStr}.json`;
+}
+
+/**
+ * Trägt eine erfolgreich übertragene Datei ins Bestätigungsregister ein,
+ * damit der tägliche Cleanup-Cron sie frühestens 5 Kalendertage später aus
+ * Vercel Blob löschen darf. Schlägt diese Registrierung nach mehreren
+ * Versuchen fehl, bleibt die Datei einfach unbegrenzt in Blob liegen (sicherer
+ * Fehlerfall — kein Datenverlust, nur kein automatisches Aufräumen für genau
+ * diese eine Datei).
+ */
+async function appendToCleanupRegistry(entry: CleanupRegistryEntry, token: string): Promise<void> {
+  const pathname = cleanupRegistryPathnameForToday();
+
+  for (let attempt = 0; attempt < CLEANUP_REGISTRY_MAX_ATTEMPTS; attempt += 1) {
+    let existing: CleanupRegistryFile = { date: pathname, entries: [] };
+    let etag: string | undefined;
+
+    try {
+      const meta = await head(pathname, { token });
+      const response = await fetch(meta.url, { cache: "no-store" });
+      if (response.ok) {
+        const parsed = (await response.json()) as Partial<CleanupRegistryFile>;
+        if (Array.isArray(parsed.entries)) {
+          existing = { date: pathname, entries: parsed.entries };
+        }
+      }
+      etag = meta.etag;
+    } catch (error) {
+      if (!(error instanceof BlobNotFoundError)) {
+        throw error;
+      }
+      // Datei existiert noch nicht — erster Eintrag des Tages, kein ETag nötig.
+    }
+
+    const updated: CleanupRegistryFile = {
+      date: pathname,
+      entries: [...existing.entries, entry],
+    };
+
+    try {
+      await put(pathname, JSON.stringify(updated), {
+        access: "public",
+        allowOverwrite: true,
+        addRandomSuffix: false,
+        contentType: "application/json",
+        token,
+        ...(etag ? { ifMatch: etag } : {}),
+      });
+      return;
+    } catch (error) {
+      if (error instanceof BlobPreconditionFailedError) {
+        continue; // Registerdatei wurde zwischenzeitlich von einer anderen Anfrage geändert — erneut versuchen.
+      }
+      throw error;
+    }
+  }
+
+  throw new Error("Bestätigungsregister konnte nach mehreren Versuchen nicht aktualisiert werden.");
 }
 
 export const config = {
@@ -177,10 +274,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     }
 
     try {
-      await del(blobUrl, { token: getBlobReadWriteToken() });
+      await appendToCleanupRegistry(
+        { blobUrl, kind, filename, confirmedAt: Date.now() },
+        getBlobReadWriteToken()
+      );
+      console.log(
+        `[ftps-transfer] blob confirmed for scheduled cleanup (5 Kalendertage ab jetzt): ${blobUrl}`
+      );
     } catch (error) {
-      // FTPS succeeded — cleanup failure is non-critical, just log it.
-      console.warn("[ftps-transfer] blob cleanup failed after successful FTPS upload", error);
+      // FTPS succeeded — registration failure is non-critical (file just stays
+      // in Blob indefinitely instead of being auto-cleaned after 5 days; no
+      // data loss, only a missed cleanup for this one file). Log clearly so
+      // it can be noticed/investigated.
+      console.warn(
+        "[ftps-transfer] could not register blob for scheduled 5-day cleanup — file remains in Vercel Blob, no automatic deletion will happen for it",
+        error
+      );
     }
 
     console.log(`[ftps-transfer] success: ${remotePath}`);

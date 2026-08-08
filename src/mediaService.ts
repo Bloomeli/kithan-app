@@ -67,11 +67,26 @@ export async function uploadMediaRecord(recordOrId: MediaRecord | string): Promi
   const uploadBody = (await loadMediaForUpload(id)) ?? forUpload;
 
   try {
-    const result = await mediaUploadAdapter.upload(uploadBody);
+    const result = await mediaUploadAdapter.upload(uploadBody, {
+      // Retry-ohne-Re-Upload: sobald der Blob-Upload durchgelaufen ist (auch
+      // wenn der anschließende FTPS-Schritt danach noch scheitert), wird die
+      // Blob-URL sofort in IndexedDB gesichert — ein späterer Retry kann
+      // damit direkt bei FTPS ansetzen, ohne erneut hochzuladen.
+      onBlobUploaded: async ({ blobUrl, remoteFilename }) => {
+        await updateMediaUploadState(id, {
+          uploadStatus: "uploading",
+          pendingBlobUrl: blobUrl,
+          pendingRemoteFilename: remoteFilename,
+        });
+      },
+    });
     const updated = await updateMediaUploadState(id, {
       uploadStatus: "uploaded",
       uploadError: "",
       remotePath: result.remotePath,
+      // Vollständig erfolgreich abgeschlossen — kein Retry-Anker mehr nötig.
+      pendingBlobUrl: "",
+      pendingRemoteFilename: "",
     });
     console.log(`[uploadMediaRecord] OK id=${id} kind=${uploadBody.kind} remotePath=${result.remotePath ?? "(none)"}`);
     return (
@@ -80,6 +95,8 @@ export async function uploadMediaRecord(recordOrId: MediaRecord | string): Promi
         uploadStatus: "uploaded",
         uploadError: "",
         remotePath: result.remotePath,
+        pendingBlobUrl: "",
+        pendingRemoteFilename: "",
       }
     );
   } catch (error) {

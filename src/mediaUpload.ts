@@ -12,6 +12,15 @@ export interface MediaUploadResult {
   remotePath?: string;
 }
 
+export interface MediaUploadHooks {
+  /**
+   * Retry-ohne-Re-Upload: wird unmittelbar nach einem frisch erfolgreichen
+   * Blob-Upload aufgerufen (noch vor dem FTPS-Schritt), damit der Aufrufer
+   * die Blob-URL persistieren kann — siehe blobFtpsUpload.ts.
+   */
+  onBlobUploaded?: (info: { blobUrl: string; remoteFilename: string }) => void | Promise<void>;
+}
+
 export interface MediaUploadAdapter {
   readonly kind: UploadTargetKind;
   /**
@@ -19,7 +28,7 @@ export interface MediaUploadAdapter {
    * local-only: no-op. blob-ftps: direct browser upload to Vercel Blob,
    * then server-side FTPS transfer to the company server.
    */
-  upload(record: MediaRecord): Promise<MediaUploadResult>;
+  upload(record: MediaRecord, hooks?: MediaUploadHooks): Promise<MediaUploadResult>;
   /** Optional batch helper for a later sync step. */
   uploadMany?(records: MediaRecord[]): Promise<MediaUploadResult[]>;
 }
@@ -49,13 +58,19 @@ class HttpUploadAdapter implements MediaUploadAdapter {
 class BlobFtpsUploadAdapter implements MediaUploadAdapter {
   readonly kind = "blob-ftps" as const;
 
-  async upload(record: MediaRecord): Promise<MediaUploadResult> {
+  async upload(record: MediaRecord, hooks?: MediaUploadHooks): Promise<MediaUploadResult> {
     const result = await uploadViaBlobAndFtps({
       kind: record.kind,
       ownerKey: record.ownerKey,
       mediaId: record.id,
       mimeType: record.mimeType || record.blob.type || "application/octet-stream",
       blob: record.blob,
+      // Retry-ohne-Re-Upload: falls ein früherer Versuch den Blob-Upload
+      // bereits erfolgreich abgeschlossen hatte (siehe pendingBlobUrl in
+      // mediaStore.ts), wird hier direkt bei der FTPS-Übertragung angesetzt.
+      existingBlobUrl: record.pendingBlobUrl || undefined,
+      existingRemoteFilename: record.pendingRemoteFilename || undefined,
+      onBlobUploaded: hooks?.onBlobUploaded,
     });
 
     if (!result.ok) {

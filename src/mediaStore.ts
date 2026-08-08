@@ -30,6 +30,16 @@ export interface MediaRecord {
   uploadStatus?: MediaUploadStatus;
   uploadError?: string;
   remotePath?: string;
+  /**
+   * Blob-URL eines bereits erfolgreich zu Vercel Blob hochgeladenen, aber
+   * noch nicht per FTPS bestätigten Uploads. Ermöglicht einem späteren Retry
+   * (nach FTPS-Fehlschlag), direkt bei der FTPS-Übertragung anzusetzen, ohne
+   * die Datei erneut vom Gerät zu Vercel Blob hochladen zu müssen. Wird nach
+   * erfolgreichem Abschluss wieder geleert.
+   */
+  pendingBlobUrl?: string;
+  /** Der bei diesem Blob-Upload verwendete Ziel-Dateiname (siehe pendingBlobUrl). */
+  pendingRemoteFilename?: string;
 }
 
 /**
@@ -51,6 +61,8 @@ interface StoredMediaRecord {
   uploadStatus?: MediaUploadStatus;
   uploadError?: string;
   remotePath?: string;
+  pendingBlobUrl?: string;
+  pendingRemoteFilename?: string;
 }
 
 const DB_NAME = "kithan-media";
@@ -206,12 +218,14 @@ async function detachBytes(
 
 function uploadFieldsFromStored(stored: StoredMediaRecord): Pick<
   MediaRecord,
-  "uploadStatus" | "uploadError" | "remotePath"
+  "uploadStatus" | "uploadError" | "remotePath" | "pendingBlobUrl" | "pendingRemoteFilename"
 > {
   return {
     uploadStatus: stored.uploadStatus,
     uploadError: stored.uploadError,
     remotePath: stored.remotePath,
+    pendingBlobUrl: stored.pendingBlobUrl,
+    pendingRemoteFilename: stored.pendingRemoteFilename,
   };
 }
 
@@ -324,6 +338,8 @@ export async function saveMedia(
     uploadStatus: record.uploadStatus ?? ("pending" as MediaUploadStatus),
     uploadError: record.uploadError,
     remotePath: record.remotePath,
+    pendingBlobUrl: record.pendingBlobUrl,
+    pendingRemoteFilename: record.pendingRemoteFilename,
   };
 
   // Attempt 1: detached Blob + plain metadata only
@@ -518,6 +534,14 @@ export async function updateMediaUploadState(
     uploadStatus: MediaUploadStatus;
     uploadError?: string;
     remotePath?: string;
+    /**
+     * Omit to leave the existing value untouched (e.g. while still
+     * "uploading" or on failure — keeps a prior successful Blob upload
+     * retryable without a fresh Blob PUT). Pass "" to explicitly clear it
+     * (e.g. once the whole transfer finally succeeded).
+     */
+    pendingBlobUrl?: string;
+    pendingRemoteFilename?: string;
   }
 ): Promise<MediaRecord | null> {
   await ensureMediaDbReady();
@@ -552,6 +576,11 @@ export async function updateMediaUploadState(
     uploadStatus: state.uploadStatus,
     uploadError: state.uploadError ?? "",
     remotePath: state.remotePath ?? existing.remotePath,
+    pendingBlobUrl: state.pendingBlobUrl !== undefined ? state.pendingBlobUrl : existing.pendingBlobUrl,
+    pendingRemoteFilename:
+      state.pendingRemoteFilename !== undefined
+        ? state.pendingRemoteFilename
+        : existing.pendingRemoteFilename,
   };
 
   const blobRecord: StoredMediaRecord = {
