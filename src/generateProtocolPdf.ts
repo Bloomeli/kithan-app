@@ -82,6 +82,22 @@ const PAGE_HEIGHT = 297;
 const CONTENT_WIDTH = PAGE_WIDTH - MARGIN * 2;
 const LINE_HEIGHT = 5.5;
 const SECTION_GAP = 4;
+const CAPTION_LINE_HEIGHT = 6;
+const BLOCK_GAP = 5;
+
+// Firmen-PDF-Fotolayout (Schritt 6 des Architekturplans):
+// Querformat: bis zu 2 Fotos übereinander pro Seite -> Boxhöhe so gewählt,
+// dass 2x(Box + Bildunterschrift + Abstand) sicher auf eine A4-Seite passt.
+const COMPANY_PHOTO_LANDSCAPE_BOX_H = 110;
+// Hochformat: immer nur 1 Foto pro eigener Seite, möglichst groß.
+const COMPANY_PHOTO_PORTRAIT_BOX_H = 250;
+// Zielauflösung fürs Firmen-PDF: bewusst deutlich unter der Kamera-
+// Originalauflösung (bzw. auch unter der beim Sofort-Upload gespeicherten
+// ~2000px-Version), aber hoch genug, dass Schäden/Zählerstände/Räume beim
+// A4-Ausdruck weiterhin klar erkennbar bleiben.
+const COMPANY_PHOTO_TARGET_DPI = 200;
+const COMPANY_PHOTO_MAX_LONG_SIDE_PX = 1700;
+const COMPANY_PHOTO_JPEG_QUALITY = 0.82;
 
 function formatDateDe(isoDate: string): string {
   if (!isoDate) {
@@ -196,6 +212,37 @@ class PdfWriter {
     this.doc.addImage(dataUrl, "PNG", MARGIN, this.y, imgWidth, imgHeight);
     this.y += imgHeight + 6;
   }
+
+  /** True wenn die aktuelle Seite noch komplett leer ist (nichts seit dem letzten addPage geschrieben). */
+  isAtPageTop(): boolean {
+    return this.y <= MARGIN + 0.01;
+  }
+
+  /** Erzwingt eine neue, leere Seite — außer die aktuelle ist ohnehin schon leer. */
+  forceNewPage(): void {
+    if (!this.isAtPageTop()) {
+      this.doc.addPage();
+      this.y = MARGIN;
+    }
+  }
+
+  /** Zentriertes Bild (z.B. Foto fürs Firmen-PDF) mit optionaler Bildunterschrift darunter. */
+  addImageBlock(dataUrl: string, format: "JPEG" | "PNG", widthMm: number, heightMm: number, caption?: string): void {
+    const captionSpace = caption ? CAPTION_LINE_HEIGHT : 0;
+    this.ensureSpace(heightMm + captionSpace + BLOCK_GAP);
+    const x = MARGIN + (CONTENT_WIDTH - widthMm) / 2;
+    this.doc.addImage(dataUrl, format, x, this.y, widthMm, heightMm);
+    this.y += heightMm + 3;
+    if (caption) {
+      this.doc.setFont("helvetica", "italic");
+      this.doc.setFontSize(9);
+      this.doc.text(caption, MARGIN, this.y);
+      this.doc.setFont("helvetica", "normal");
+      this.doc.setFontSize(11);
+      this.y += CAPTION_LINE_HEIGHT;
+    }
+    this.y += BLOCK_GAP - 3;
+  }
 }
 
 function writeSignatureSection(
@@ -234,9 +281,143 @@ export interface ProtocolPdfBytes {
   base64: string;
 }
 
-export function generateAndDownloadProtocolPdf(input: ProtocolPdfInput): ProtocolPdfBytes {
-  const writer = new PdfWriter();
+export interface ProtocolPdfCompanyRoom {
+  label: string;
+  /** Fotos dieses Raums in Aufnahme-Reihenfolge. Videos gehören NICHT hierher (siehe generateCompanyProtocolPdf). */
+  photos: Blob[];
+}
 
+/**
+ * Dekodiert einen Foto-Blob über ein <img>-Element und zeichnet ihn auf ein
+ * frisches Canvas. Moderne Browser (inkl. Safari/iOS) wenden dabei
+ * automatisch die EXIF-Orientation an ("image-orientation: from-image" ist
+ * seit einigen Jahren Standardverhalten bei <img>) — das Canvas enthält
+ * damit bereits korrekt gedrehte Pixel, egal ob hochkant oder quer
+ * aufgenommen wurde, und egal ob das Original noch ein rohes EXIF-Tag trägt
+ * (Fallback-Pfad in mediaProcess.ts) oder bereits selbst über Canvas
+ * verarbeitet wurde (Normalfall, dort bereits orientierungsfrei). Es wird
+ * nirgends manuell um 90° gedreht.
+ */
+async function loadPhotoCanvasAutoOriented(blob: Blob): Promise<HTMLCanvasElement> {
+  const url = URL.createObjectURL(blob);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error("Foto konnte nicht dekodiert werden."));
+      el.src = url;
+    });
+    const width = image.naturalWidth || image.width;
+    const height = image.naturalHeight || image.height;
+    if (width < 1 || height < 1) {
+      throw new Error("Ungültige Bildabmessungen.");
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      throw new Error("2D-Kontext für PDF-Fotoverarbeitung nicht verfügbar.");
+    }
+    ctx.drawImage(image, 0, 0, width, height);
+    return canvas;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/** Verkleinert (nie vergrößert) ein Canvas auf eine maximale lange Seite, Seitenverhältnis bleibt erhalten. */
+function downscaleCanvas(canvas: HTMLCanvasElement, maxLongSidePx: number): HTMLCanvasElement {
+  const longSide = Math.max(canvas.width, canvas.height);
+  if (longSide <= maxLongSidePx) {
+    return canvas;
+  }
+  const scale = maxLongSidePx / longSide;
+  const targetW = Math.max(1, Math.round(canvas.width * scale));
+  const targetH = Math.max(1, Math.round(canvas.height * scale));
+  const out = document.createElement("canvas");
+  out.width = targetW;
+  out.height = targetH;
+  const ctx = out.getContext("2d");
+  if (!ctx) {
+    throw new Error("2D-Kontext für PDF-Fotoverarbeitung nicht verfügbar.");
+  }
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(canvas, 0, 0, targetW, targetH);
+  return out;
+}
+
+/**
+ * Bettet ein einzelnes Foto ein: Ausrichtung (Quer-/Hochformat) bestimmt die
+ * Zielbox, danach wird proportional verkleinert (nie verzerrt), separat für
+ * das PDF neu komprimiert (siehe COMPANY_PHOTO_*-Konstanten) und platziert.
+ * Verändert ausschließlich eine Im-Speicher-Kopie — der übergebene Original-
+ * Blob (und damit die separat gespeicherte Originaldatei) bleibt unberührt.
+ */
+async function addSinglePhotoToPdf(writer: PdfWriter, blob: Blob, caption: string): Promise<void> {
+  const canvas = await loadPhotoCanvasAutoOriented(blob);
+  const isLandscape = canvas.width >= canvas.height;
+  const boxH = isLandscape ? COMPANY_PHOTO_LANDSCAPE_BOX_H : COMPANY_PHOTO_PORTRAIT_BOX_H;
+
+  const aspect = canvas.width / canvas.height;
+  let drawW = CONTENT_WIDTH;
+  let drawH = drawW / aspect;
+  if (drawH > boxH) {
+    drawH = boxH;
+    drawW = drawH * aspect;
+  }
+
+  const targetLongSidePx = Math.min(
+    COMPANY_PHOTO_MAX_LONG_SIDE_PX,
+    Math.round((Math.max(drawW, drawH) / 25.4) * COMPANY_PHOTO_TARGET_DPI)
+  );
+  const resized = downscaleCanvas(canvas, targetLongSidePx);
+  const dataUrl = resized.toDataURL("image/jpeg", COMPANY_PHOTO_JPEG_QUALITY);
+
+  if (isLandscape) {
+    // Bis zu 2 pro Seite: nur umbrechen, wenn der verbleibende Platz nicht reicht.
+    writer.ensureSpace(drawH + CAPTION_LINE_HEIGHT + BLOCK_GAP);
+  } else {
+    // Hochformat: nie mit einem zweiten Hochformatfoto oder viel anderem Inhalt teilen.
+    writer.forceNewPage();
+  }
+  writer.addImageBlock(dataUrl, "JPEG", drawW, drawH, caption);
+}
+
+async function addCompanyPhotoSections(writer: PdfWriter, rooms: ProtocolPdfCompanyRoom[]): Promise<void> {
+  const roomsWithPhotos = rooms.filter((room) => room.photos.length > 0);
+  writer.addSection("Fotos");
+  if (roomsWithPhotos.length === 0) {
+    writer.addWrapped("Keine Fotos vorhanden.");
+    return;
+  }
+  for (const room of roomsWithPhotos) {
+    writer.addSubsection(room.label);
+    for (let i = 0; i < room.photos.length; i += 1) {
+      const caption = `${room.label} – Foto ${i + 1}`;
+      try {
+        await addSinglePhotoToPdf(writer, room.photos[i], caption);
+      } catch (error) {
+        // Ein einzelnes fehlerhaftes Foto (z.B. Decode-Problem) darf das
+        // gesamte Firmen-PDF nicht zum Absturz bringen — stattdessen Platzhalter-
+        // Text und weiter mit dem nächsten Foto.
+        console.error(`[generateProtocolPdf] Firmen-PDF: Foto konnte nicht eingebettet werden (${caption}):`, error);
+        writer.addWrapped(`(${caption}: konnte nicht eingebettet werden)`);
+      }
+    }
+  }
+}
+
+/**
+ * Schreibt den kompletten Text-Teil des Protokolls (Kopfdaten, Räume,
+ * Zählerstände, Abschluss, Schlüsselübergabe, Unterschriften) auf den
+ * übergebenen Writer. Gemeinsam genutzt von der Mieter-Version (nur Text,
+ * siehe generateAndDownloadProtocolPdf) und der Firmen-Version (Text +
+ * anschließend Fotos, siehe generateCompanyProtocolPdf) — beide Versionen
+ * sollen hier textlich immer identisch bleiben.
+ */
+function writeProtocolBody(writer: PdfWriter, input: ProtocolPdfInput): void {
   writer.addTitle(`Protokoll ${input.protokollartLabel} – ${input.objektartLabel}`);
   writer.addLine("Objektart", input.objektartLabel);
   writer.addLine("Protokollart", input.protokollartLabel);
@@ -304,6 +485,11 @@ export function generateAndDownloadProtocolPdf(input: ProtocolPdfInput): Protoco
   }
 
   writeSignatureSection(writer, input);
+}
+
+export function generateAndDownloadProtocolPdf(input: ProtocolPdfInput): ProtocolPdfBytes {
+  const writer = new PdfWriter();
+  writeProtocolBody(writer, input);
 
   const filename = buildFilename(input);
   const doc = writer.getDocument();
@@ -321,6 +507,31 @@ export function generateAndDownloadProtocolPdf(input: ProtocolPdfInput): Protoco
   // checks"/CORS error on the token fetch). The PDF only needs to exist as
   // base64 in memory here — for the FTPS upload and the tenant email
   // attachment, both of which use the return value below, not a local file.
+  return { filename, base64 };
+}
+
+/**
+ * Firmen-Version des Protokolls: identischer Text-Teil wie die Mieter-
+ * Version, anschließend die aufgenommenen Fotos (gruppiert nach Raum, mit
+ * Bildunterschrift "<Raum> – Foto <n>"), gruppiert und ausgerichtet wie in
+ * Schritt 6 festgelegt. Videos werden bewusst NIE eingebettet — sie bleiben
+ * ausschließlich als separate Mediendateien auf dem Server (Schritt 5:
+ * Vorgangs-/Dateinamenslogik). Diese Version geht an den Firmenserver, NICHT
+ * per E-Mail an den Mieter (siehe generateAndDownloadProtocolPdf dafür).
+ */
+export async function generateCompanyProtocolPdf(
+  input: ProtocolPdfInput,
+  photoRooms: ProtocolPdfCompanyRoom[]
+): Promise<ProtocolPdfBytes> {
+  const writer = new PdfWriter();
+  writeProtocolBody(writer, input);
+  await addCompanyPhotoSections(writer, photoRooms);
+
+  const filename = `Firma_${buildFilename(input)}`;
+  const doc = writer.getDocument();
+  const dataUri = doc.output("datauristring") as string;
+  const comma = dataUri.indexOf(",");
+  const base64 = comma >= 0 ? dataUri.slice(comma + 1) : dataUri;
   return { filename, base64 };
 }
 

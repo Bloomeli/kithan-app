@@ -7,6 +7,8 @@ import { deleteMediaForOwner, deleteMediaForSession, getMediaForOwner, runMediaD
 import {
   generateAndDownloadProtocolPdf,
   generateAndDownloadSchluesselPdf,
+  generateCompanyProtocolPdf,
+  type ProtocolPdfCompanyRoom,
   type ProtocolPdfInput,
   type ProtocolPdfKeyLine,
   type ProtocolPdfRoom,
@@ -2825,6 +2827,8 @@ export interface VorgangMediaNamingEntry {
   indexWithinKind: number;
   /** z.B. "01-Flur-Foto-02.jpg" — Rohname, Zeichen-Feinschliff übernimmt sanitizeFilename serverseitig (siehe api/ftps-transfer.ts). */
   filename: string;
+  /** Original-Blob aus IndexedDB — für das Firmen-PDF (Schritt 6) genutzt, um Fotos einzubetten, ohne ein zweites Mal aus der DB zu lesen. */
+  blob: Blob;
 }
 
 /**
@@ -2867,11 +2871,35 @@ async function computeVorgangMediaNaming(
         kind: record.kind,
         indexWithinKind,
         filename: `${roomPrefix}-${room.label}-${kindLabel}-${String(indexWithinKind).padStart(2, "0")}${ext}`,
+        blob: record.blob,
       });
     });
   }
 
   return entries;
+}
+
+/**
+ * Gruppiert die (bereits raum- und aufnahmereihenfolge-sortierten) Einträge
+ * aus computeVorgangMediaNaming zu "Raum -> Foto-Blobs" fürs Firmen-PDF
+ * (Schritt 6). Videos werden hier bewusst ausgefiltert — sie werden nie in
+ * ein PDF eingebettet. Räume ganz ohne Foto tauchen im Ergebnis gar nicht
+ * erst auf (das Firmen-PDF überspringt sie dann einfach).
+ */
+function groupPhotosByRoomForCompanyPdf(entries: VorgangMediaNamingEntry[]): ProtocolPdfCompanyRoom[] {
+  const rooms: { roomIndex: number; label: string; photos: Blob[] }[] = [];
+  for (const entry of entries) {
+    if (entry.kind !== "photo") {
+      continue;
+    }
+    let room = rooms.find((r) => r.roomIndex === entry.roomIndex);
+    if (!room) {
+      room = { roomIndex: entry.roomIndex, label: entry.roomLabel, photos: [] };
+      rooms.push(room);
+    }
+    room.photos.push(entry.blob);
+  }
+  return rooms.sort((a, b) => a.roomIndex - b.roomIndex).map(({ label, photos }) => ({ label, photos }));
 }
 
 function collectStandardMetersForPdf(form: FormDraft): ProtocolPdfStandardMeter[] {
@@ -3427,14 +3455,14 @@ async function finishProtocolAsPdf(): Promise<void> {
   top.scrollIntoView({ behavior: "smooth", block: "start" });
 
   let mieterPdfOk = false;
+  let protocolPdfInput: ProtocolPdfInput | null = null;
   console.log("[finishProtocolAsPdf] PDF generation started");
   try {
-    completionMieterPdf = generateAndDownloadProtocolPdf(
-      buildProtocolPdfInput(context.objektart, context.protokollart, form)
-    );
+    protocolPdfInput = buildProtocolPdfInput(context.objektart, context.protokollart, form);
+    completionMieterPdf = generateAndDownloadProtocolPdf(protocolPdfInput);
     mieterPdfOk = true;
     console.log(
-      `[finishProtocolAsPdf] PDF generated successfully (filename=${completionMieterPdf.filename}, base64Length=${completionMieterPdf.base64.length})`
+      `[finishProtocolAsPdf] Mieter-PDF generated successfully (filename=${completionMieterPdf.filename}, base64Length=${completionMieterPdf.base64.length})`
     );
   } catch (error) {
     // This happens BEFORE any network request — if this throws, the archive
@@ -3442,7 +3470,7 @@ async function finishProtocolAsPdf(): Promise<void> {
     // shows a distinct "PDF konnte nicht erstellt werden" message for this case
     // (mieterPdfOk=false), not the generic upload-failure message.
     console.error(
-      "[finishProtocolAsPdf] PDF generation FAILED — archive upload will be skipped entirely (no network request will be made):",
+      "[finishProtocolAsPdf] Mieter-PDF generation FAILED — archive upload will be skipped entirely (no network request will be made):",
       {
         errorName: error instanceof Error ? error.name : typeof error,
         errorMessage: error instanceof Error ? error.message : String(error),
@@ -3451,6 +3479,7 @@ async function finishProtocolAsPdf(): Promise<void> {
       }
     );
     completionMieterPdf = null;
+    protocolPdfInput = null;
     mieterPdfOk = false;
   }
 
@@ -3459,26 +3488,52 @@ async function finishProtocolAsPdf(): Promise<void> {
   // Upload keine Medien.
   const sessionKey = getOrCreateVorgangId(context.objektart, context.protokollart);
 
-  // Schritt 5 des Architekturplans (Datei-/Raumnummerierung): rein
-  // diagnostisch, bewusst nicht awaited und ohne jede Auswirkung auf den
-  // eigentlichen Upload — zeigt in der Konsole, welche lesbaren Dateinamen
-  // ("01-Flur-Foto-01.jpg" usw.) für die bereits aufgenommenen Fotos/Videos
-  // berechnet würden. Wird von den nächsten Schritten (Firmenversion-PDF,
-  // Ablage im Vorgangsordner) tatsächlich verwendet.
-  computeVorgangMediaNaming(sessionKey, context.objektart, form)
-    .then((naming) => {
+  // Schritt 5 des Architekturplans (Datei-/Raumnummerierung): liefert die
+  // raum-/aufnahmereihenfolge-sortierten Medien-Einträge inkl. Blob. Wird ab
+  // Schritt 6 tatsächlich gebraucht (Grundlage für die nach Raum gruppierten
+  // Fotos im Firmen-PDF unten) — daher jetzt awaited statt nur diagnostisch.
+  // Ändert nichts an Aufnahme, lokaler Speicherung oder Sofort-Upload der
+  // Medien selbst.
+  let mediaNaming: VorgangMediaNamingEntry[] = [];
+  try {
+    mediaNaming = await computeVorgangMediaNaming(sessionKey, context.objektart, form);
+    console.log(
+      `[vorgang-naming] Berechnete Datei-Nummerierung (${mediaNaming.length} Datei(en)):`,
+      mediaNaming.map((entry) => entry.filename)
+    );
+  } catch (error) {
+    console.error("[vorgang-naming] Berechnung der Datei-Nummerierung fehlgeschlagen:", error);
+  }
+
+  // Firmen-PDF (Schritt 6): textlich identisch zum Mieter-PDF, zusätzlich die
+  // aufgenommenen Fotos gruppiert nach Raum (keine Videos — die bleiben
+  // ausschließlich als separate Mediendatei auf dem Server). Diese Version
+  // geht NICHT per E-Mail an den Mieter, sondern ersetzt weiter unten nur
+  // das Mieter-PDF beim Server-Upload. Schlägt die Foto-Einbettung
+  // unerwartet komplett fehl (z.B. Speicherdruck bei sehr vielen Fotos),
+  // wird mit deutlicher Warnung auf das rein textliche Mieter-PDF für den
+  // Server-Upload zurückgefallen, statt den gesamten Abschluss zu blockieren.
+  let completionCompanyPdf: { filename: string; base64: string } | null = null;
+  if (mieterPdfOk && protocolPdfInput) {
+    try {
+      const photoRooms = groupPhotosByRoomForCompanyPdf(mediaNaming);
+      completionCompanyPdf = await generateCompanyProtocolPdf(protocolPdfInput, photoRooms);
       console.log(
-        `[vorgang-naming] Berechnete Datei-Nummerierung (${naming.length} Datei(en)):`,
-        naming.map((entry) => entry.filename)
+        `[finishProtocolAsPdf] Firmen-PDF generated successfully (filename=${completionCompanyPdf.filename}, base64Length=${completionCompanyPdf.base64.length}, Räume mit Fotos=${photoRooms.length})`
       );
-    })
-    .catch((error) => {
-      console.error("[vorgang-naming] Berechnung der Datei-Nummerierung fehlgeschlagen:", error);
-    });
+    } catch (error) {
+      console.error(
+        "[finishProtocolAsPdf] Firmen-PDF (mit Fotos) konnte nicht erstellt werden — Fallback auf das textliche Mieter-PDF für den Server-Upload:",
+        error
+      );
+      completionCompanyPdf = null;
+    }
+  }
+  const archivePdf = completionCompanyPdf ?? completionMieterPdf;
 
   let archiveResult: ProtocolArchiveUploadResult | null = null;
   let vorgangsnummer: string | null = null;
-  if (mieterPdfOk && completionMieterPdf) {
+  if (mieterPdfOk && archivePdf) {
     // Vorgangsnummer + Ordnerpfad VOR dem Upload anfordern, da der finale
     // PDF-Dateiname die Nummer bereits enthalten soll (z.B.
     // "0027_Müller_WH07.pdf" in "2026/Privat/Übergabe/"). Anders als bei
@@ -3489,7 +3544,7 @@ async function finishProtocolAsPdf(): Promise<void> {
     // übereinstimmen könnte. Schlägt schon die Nummern-Anfrage selbst fehl
     // (z.B. offline), wird ohne Nummer und im bisherigen, flachen Ordner
     // hochgeladen (kein Blockieren, kein Datenverlust).
-    let pdfFilename = completionMieterPdf.filename;
+    let pdfFilename = archivePdf.filename;
     let pdfRemoteSubdir: string | undefined;
     const numberResult = await requestVorgangsnummer(sessionKey, context.objektart);
     if (numberResult.ok && numberResult.vorgangsnummer && numberResult.jahr) {
@@ -3521,7 +3576,7 @@ async function finishProtocolAsPdf(): Promise<void> {
       archiveResult = await uploadProtocolArchive({
         sessionKey,
         pdfFilename,
-        pdfBase64: completionMieterPdf.base64,
+        pdfBase64: archivePdf.base64,
         pdfRemoteSubdir,
       });
       console.log(
@@ -3541,6 +3596,9 @@ async function finishProtocolAsPdf(): Promise<void> {
   }
 
   // Only after all transfers finished: final message + email section (no form body).
+  // Die E-Mail an den Mieter (weiter unten in renderMieterEmailSection) nutzt
+  // weiterhin ausschließlich completionMieterPdf (Text, ohne Fotos/Videos) —
+  // daran ändert das neue Firmen-PDF nichts.
   renderCompletionTop(formStandard, context.protokollart, archiveResult, mieterPdfOk, vorgangsnummer);
 }
 
