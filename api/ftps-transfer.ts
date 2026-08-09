@@ -234,6 +234,23 @@ async function uploadOverFtps(
         `headerBytes="${debugPreviewHeaderBytes(buffer)}" startsWithPdfHeader=${buffer.subarray(0, 5).toString("latin1") === "%PDF-"}`
     );
     await client.uploadFrom(Readable.from(buffer), remoteFileName);
+    // TEMPORÄRE DIAGNOSE (Punkt 5 der Analyse-Anfrage): Größenvergleich
+    // lokaler Buffer vs. vom Server per SIZE gemeldete Dateigröße direkt nach
+    // dem Upload. Nicht jeder FTP-Server unterstützt SIZE — daher bewusst in
+    // einem eigenen try/catch, damit ein nicht unterstütztes SIZE niemals den
+    // eigentlichen (bereits erfolgreichen) Upload als Fehler erscheinen lässt.
+    try {
+      const remoteSize = await client.size(remoteFileName);
+      console.log(
+        `[pdf-diag] nach FTPS-Upload (${remoteFileName}): lokale Buffer-Länge=${buffer.length} ` +
+          `vom Server gemeldete Größe (SIZE)=${remoteSize} match=${remoteSize === buffer.length}`
+      );
+    } catch (error) {
+      console.warn(
+        `[pdf-diag] SIZE-Befehl vom FTPS-Server nicht unterstützt oder fehlgeschlagen (${remoteFileName}) — kein Fehler, nur fehlende Zusatzdiagnose`,
+        error
+      );
+    }
     return `${remoteDir.replace(/\/+$/, "")}/${remoteFileName}`;
   } finally {
     client.close();
