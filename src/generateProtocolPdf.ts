@@ -281,6 +281,34 @@ export interface ProtocolPdfBytes {
   base64: string;
 }
 
+/**
+ * TEMPORÄRE DIAGNOSE (PDF-Ungültig-Fehler auf dem Firmenserver): loggt direkt
+ * nach der PDF-Erzeugung, ob der base64-dekodierte Anfang tatsächlich mit
+ * "%PDF-" beginnt (Kontrollpunkt 1 von 4, siehe auch blobFtpsUpload.ts und
+ * api/ftps-transfer.ts). Rein lesend — verändert weder base64 noch das PDF.
+ * Nach Abschluss der Fehlersuche wieder entfernbar.
+ */
+function debugLogPdfHeader(label: string, base64: string): void {
+  try {
+    // 20 base64-Zeichen (Vielfaches von 4, keine Padding-Probleme) ergeben
+    // 15 dekodierte Bytes — genug für "%PDF-1.x" plus etwas Puffer.
+    const chunk = base64.slice(0, 20);
+    const decoded = atob(chunk);
+    const printable = decoded
+      .split("")
+      .map((ch) => {
+        const code = ch.charCodeAt(0);
+        return code >= 0x20 && code <= 0x7e ? ch : `\\x${code.toString(16).padStart(2, "0")}`;
+      })
+      .join("");
+    console.log(
+      `[pdf-diag] 1/4 nach PDF-Erzeugung (${label}): base64Length=${base64.length} headerBytes="${printable}" startsWithPdfHeader=${decoded.startsWith("%PDF-")}`
+    );
+  } catch (error) {
+    console.warn(`[pdf-diag] 1/4 nach PDF-Erzeugung (${label}): Header-Check fehlgeschlagen`, error);
+  }
+}
+
 export interface ProtocolPdfCompanyRoom {
   label: string;
   /** Fotos dieses Raums in Aufnahme-Reihenfolge. Videos gehören NICHT hierher (siehe generateCompanyProtocolPdf). */
@@ -496,6 +524,7 @@ export function generateAndDownloadProtocolPdf(input: ProtocolPdfInput): Protoco
   const dataUri = doc.output("datauristring") as string;
   const comma = dataUri.indexOf(",");
   const base64 = comma >= 0 ? dataUri.slice(comma + 1) : dataUri;
+  debugLogPdfHeader(`Mieter-PDF ${filename}`, base64);
   // Deliberately NOT calling doc.save(filename) here: on an iOS/iPadOS
   // "Zum Home-Bildschirm"-PWA (standalone display mode, no browser tabs),
   // jsPDF's save() opens the generated PDF in Safari's built-in full-screen
@@ -532,6 +561,7 @@ export async function generateCompanyProtocolPdf(
   const dataUri = doc.output("datauristring") as string;
   const comma = dataUri.indexOf(",");
   const base64 = comma >= 0 ? dataUri.slice(comma + 1) : dataUri;
+  debugLogPdfHeader(`Firmen-PDF ${filename}`, base64);
   return { filename, base64 };
 }
 
@@ -571,6 +601,7 @@ export function generateAndDownloadSchluesselPdf(input: SchluesselPdfInput): { f
   const dataUri = doc.output("datauristring") as string;
   const comma = dataUri.indexOf(",");
   const base64 = comma >= 0 ? dataUri.slice(comma + 1) : dataUri;
+  debugLogPdfHeader(`Schlüssel-PDF ${filename}`, base64);
   // Bewusst KEIN doc.save(filename) — siehe identische Begründung bei
   // generateAndDownloadProtocolPdf oben: öffnet auf iOS/iPadOS-PWA Safaris
   // Vollbild-PDF-Vorschau und unterbricht dadurch den direkt danach

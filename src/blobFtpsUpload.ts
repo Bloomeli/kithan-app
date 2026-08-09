@@ -124,6 +124,31 @@ export function extensionFor(mimeType: string, kind: BlobFtpsMediaKind): string 
   return kind === "video" ? ".mp4" : ".jpg";
 }
 
+/**
+ * TEMPORÄRE DIAGNOSE (PDF-Ungültig-Fehler auf dem Firmenserver): loggt
+ * unmittelbar vor dem Blob-Upload (Kontrollpunkt 2 von 4) die ersten Bytes
+ * des tatsächlich zu put() übergebenen Blobs. Rein lesend (blob.slice() +
+ * arrayBuffer() erzeugen nur eine Kopie der ersten Bytes, der Original-Blob
+ * bleibt unverändert). Nach Abschluss der Fehlersuche wieder entfernbar.
+ */
+async function debugLogBlobHeader(label: string, blob: Blob): Promise<void> {
+  try {
+    const headBuffer = await blob.slice(0, 24).arrayBuffer();
+    const bytes = new Uint8Array(headBuffer);
+    let printable = "";
+    let asciiHeader = "";
+    for (const byte of bytes) {
+      printable += byte >= 0x20 && byte <= 0x7e ? String.fromCharCode(byte) : `\\x${byte.toString(16).padStart(2, "0")}`;
+      asciiHeader += String.fromCharCode(byte);
+    }
+    console.log(
+      `[pdf-diag] 2/4 unmittelbar vor Blob-Upload (${label}): blobSize=${blob.size} mimeType=${blob.type || "(leer)"} headerBytes="${printable}" startsWithPdfHeader=${asciiHeader.startsWith("%PDF-")}`
+    );
+  } catch (error) {
+    console.warn(`[pdf-diag] 2/4 unmittelbar vor Blob-Upload (${label}): Header-Check fehlgeschlagen`, error);
+  }
+}
+
 function buildRemoteFilename(input: BlobFtpsUploadInput, ext: string): string {
   if (input.filename?.trim()) {
     return input.filename.trim();
@@ -319,13 +344,16 @@ async function runUploadViaBlobAndFtps(input: BlobFtpsUploadInput): Promise<Blob
         };
       }
 
-      // Eindeutiger Log UNMITTELBAR VOR put() — Punkt 3.
-      console.log(
-        `[blob-ftps-upload] BLOB_UPLOAD_CALL kind=${input.kind} pathname=${blobPathname} ` +
-          `mimeType=${input.mimeType || "(leer)"} bytes=${input.blob.size} online=${navigator.onLine} ` +
-          `visibility=${document.visibilityState}`
-      );
-      try {
+    // Eindeutiger Log UNMITTELBAR VOR put() — Punkt 3.
+    console.log(
+      `[blob-ftps-upload] BLOB_UPLOAD_CALL kind=${input.kind} pathname=${blobPathname} ` +
+        `mimeType=${input.mimeType || "(leer)"} bytes=${input.blob.size} online=${navigator.onLine} ` +
+        `visibility=${document.visibilityState}`
+    );
+    if (input.kind === "pdf") {
+      await debugLogBlobHeader(`${blobPathname}`, input.blob);
+    }
+    try {
         blobResult = await put(blobPathname, input.blob, {
           access: "public",
           token: clientToken,

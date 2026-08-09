@@ -145,6 +145,23 @@ function getEnv(name: string): string {
   return value;
 }
 
+/**
+ * TEMPORÄRE DIAGNOSE (PDF-Ungültig-Fehler auf dem Firmenserver): druckbare
+ * Vorschau der ersten Bytes eines Buffers, um zu sehen, ob/wo der Inhalt
+ * nicht mehr mit "%PDF-" beginnt (Kontrollpunkte 3 und 4 von 4, siehe
+ * generateProtocolPdf.ts und blobFtpsUpload.ts für 1 und 2). Rein lesend
+ * (subarray() erzeugt keine Kopie, verändert den Buffer nicht). Nach
+ * Abschluss der Fehlersuche wieder entfernbar.
+ */
+function debugPreviewHeaderBytes(buffer: Buffer, length = 24): string {
+  const slice = buffer.subarray(0, Math.min(length, buffer.length));
+  let printable = "";
+  for (const byte of slice) {
+    printable += byte >= 0x20 && byte <= 0x7e ? String.fromCharCode(byte) : `\\x${byte.toString(16).padStart(2, "0")}`;
+  }
+  return printable;
+}
+
 function sanitizeFilename(value: string, fallback: string): string {
   const cleaned = value
     .replace(/[^\w.\-äöüÄÖÜß ()]+/g, "_")
@@ -212,6 +229,10 @@ async function uploadOverFtps(
       secureOptions: { rejectUnauthorized },
     });
     await client.ensureDir(remoteDir);
+    console.log(
+      `[pdf-diag] 4/4 unmittelbar vor FTPS-Upload (${remoteFileName}): bytes=${buffer.length} ` +
+        `headerBytes="${debugPreviewHeaderBytes(buffer)}" startsWithPdfHeader=${buffer.subarray(0, 5).toString("latin1") === "%PDF-"}`
+    );
     await client.uploadFrom(Readable.from(buffer), remoteFileName);
     return `${remoteDir.replace(/\/+$/, "")}/${remoteFileName}`;
   } finally {
@@ -255,6 +276,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
         throw new Error(`Datei konnte nicht von Vercel Blob geladen werden (HTTP ${blobResponse.status}).`);
       }
       buffer = Buffer.from(await blobResponse.arrayBuffer());
+      console.log(
+        `[pdf-diag] 3/4 direkt nach Abruf aus Vercel Blob (kind=${kind} filename=${filename}): ` +
+          `contentType=${blobResponse.headers.get("content-type") ?? "(keiner)"} bytes=${buffer.length} ` +
+          `headerBytes="${debugPreviewHeaderBytes(buffer)}" startsWithPdfHeader=${buffer.subarray(0, 5).toString("latin1") === "%PDF-"}`
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Blob-Datei nicht erreichbar.";
       console.error("[ftps-transfer] blob fetch failed", message);
