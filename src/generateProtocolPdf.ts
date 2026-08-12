@@ -226,6 +226,22 @@ class PdfWriter {
     }
   }
 
+  /**
+   * Dezente horizontale Trennlinie über die volle Inhaltsbreite, um im
+   * Firmen-PDF benachbarte Raum-/Bereichsblöcke (z.B. "Flur" vs. "Küche")
+   * optisch klarer voneinander abzugrenzen. Rein visuell — fügt keinen Text
+   * hinzu und ändert an keiner Stelle Reihenfolge oder Inhalt.
+   */
+  addDivider(): void {
+    this.ensureSpace(8);
+    this.y += 2;
+    this.doc.setDrawColor(200, 200, 200);
+    this.doc.setLineWidth(0.2);
+    this.doc.line(MARGIN, this.y, MARGIN + CONTENT_WIDTH, this.y);
+    this.doc.setDrawColor(0, 0, 0);
+    this.y += 4;
+  }
+
   /** Zentriertes Bild (z.B. Foto fürs Firmen-PDF) mit optionaler Bildunterschrift darunter. */
   addImageBlock(dataUrl: string, format: "JPEG" | "PNG", widthMm: number, heightMm: number, caption?: string): void {
     const captionSpace = caption ? CAPTION_LINE_HEIGHT : 0;
@@ -420,7 +436,11 @@ async function addCompanyPhotoSections(writer: PdfWriter, rooms: ProtocolPdfComp
     writer.addWrapped("Keine Fotos vorhanden.");
     return;
   }
-  for (const room of roomsWithPhotos) {
+  for (let roomIndex = 0; roomIndex < roomsWithPhotos.length; roomIndex += 1) {
+    const room = roomsWithPhotos[roomIndex];
+    if (roomIndex > 0) {
+      writer.addDivider();
+    }
     writer.addSubsection(room.label);
     for (let i = 0; i < room.photos.length; i += 1) {
       const caption = `${room.label} – Foto ${i + 1}`;
@@ -443,9 +463,18 @@ async function addCompanyPhotoSections(writer: PdfWriter, rooms: ProtocolPdfComp
  * übergebenen Writer. Gemeinsam genutzt von der Mieter-Version (nur Text,
  * siehe generateAndDownloadProtocolPdf) und der Firmen-Version (Text +
  * anschließend Fotos, siehe generateCompanyProtocolPdf) — beide Versionen
- * sollen hier textlich immer identisch bleiben.
+ * sollen hier textlich immer identisch bleiben. Die optionale
+ * "addRoomDividers"-Option fügt (nur wenn true) eine dezente Trennlinie
+ * zwischen den einzelnen Räumen im Abschnitt "Zustand der Räume" ein — rein
+ * visuell, ändert keinen Inhalt/keine Reihenfolge. Wird ausschließlich von
+ * der Firmen-Version gesetzt, damit das Mieter-PDF unverändert bleibt.
  */
-function writeProtocolBody(writer: PdfWriter, input: ProtocolPdfInput): void {
+function writeProtocolBody(
+  writer: PdfWriter,
+  input: ProtocolPdfInput,
+  options?: { addRoomDividers?: boolean }
+): void {
+  const addRoomDividers = options?.addRoomDividers ?? false;
   writer.addTitle(`Protokoll ${input.protokollartLabel} – ${input.objektartLabel}`);
   writer.addLine("Objektart", input.objektartLabel);
   writer.addLine("Protokollart", input.protokollartLabel);
@@ -463,7 +492,10 @@ function writeProtocolBody(writer: PdfWriter, input: ProtocolPdfInput): void {
   if (input.rooms.length === 0) {
     writer.addWrapped("Keine Raumdaten erfasst.");
   } else {
-    input.rooms.forEach((room) => {
+    input.rooms.forEach((room, roomIndex) => {
+      if (addRoomDividers && roomIndex > 0) {
+        writer.addDivider();
+      }
       writer.addSubsection(room.label);
       writer.addLine("In Ordnung", room.ok ? "ja" : "nein");
       writer.addLine("Ausstattung", room.ausstattung);
@@ -553,7 +585,7 @@ export async function generateCompanyProtocolPdf(
   photoRooms: ProtocolPdfCompanyRoom[]
 ): Promise<ProtocolPdfBytes> {
   const writer = new PdfWriter();
-  writeProtocolBody(writer, input);
+  writeProtocolBody(writer, input, { addRoomDividers: true });
   await addCompanyPhotoSections(writer, photoRooms);
 
   const filename = `Firma_${buildFilename(input)}`;
