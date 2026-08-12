@@ -434,6 +434,17 @@ async function addSinglePhotoToPdf(writer: PdfWriter, blob: Blob, caption: strin
   writer.addImageBlock(dataUrl, "JPEG", drawW, drawH, caption);
 }
 
+/** Ein zugeordnetes Foto konnte nicht in die Firmen-PDF eingebettet werden. */
+export class CompanyPhotoEmbedError extends Error {
+  readonly caption: string;
+
+  constructor(caption: string) {
+    super(`${caption} konnte nicht eingebettet werden – bitte erneut versuchen`);
+    this.name = "CompanyPhotoEmbedError";
+    this.caption = caption;
+  }
+}
+
 async function addCompanyPhotoSections(writer: PdfWriter, rooms: ProtocolPdfCompanyRoom[]): Promise<void> {
   const roomsWithPhotos = rooms.filter((room) => room.photos.length > 0);
   writer.addSection("Fotos");
@@ -454,11 +465,9 @@ async function addCompanyPhotoSections(writer: PdfWriter, rooms: ProtocolPdfComp
       try {
         await addSinglePhotoToPdf(writer, room.photos[i], caption);
       } catch (error) {
-        // Ein einzelnes fehlerhaftes Foto (z.B. Decode-Problem) darf das
-        // gesamte Firmen-PDF nicht zum Absturz bringen — stattdessen Platzhalter-
-        // Text und weiter mit dem nächsten Foto.
         console.error(`[generateProtocolPdf] Firmen-PDF: Foto konnte nicht eingebettet werden (${caption}):`, error);
-        writer.addWrapped(`(${caption}: konnte nicht eingebettet werden)`);
+        // Kein Platzhalter, kein „erfolgreiches“ PDF — Abschluss gilt als fehlgeschlagen.
+        throw new CompanyPhotoEmbedError(caption);
       }
     }
   }
