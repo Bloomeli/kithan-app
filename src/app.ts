@@ -3,7 +3,7 @@
 
 import { SignaturePad } from "./signaturePad";
 import { createCardMediaControls, createRoomOkMediaRow } from "./cardMedia";
-import { deleteMediaForOwner, deleteMediaForSession, getMediaForOwner, runMediaDbSelfTest } from "./mediaStore";
+import { deleteMediaForOwner, deleteMediaForSession, getMediaForOwner, loadMediaForUpload, runMediaDbSelfTest } from "./mediaStore";
 import {
   CompanyPhotoEmbedError,
   generateAndDownloadProtocolPdf,
@@ -1215,6 +1215,57 @@ function clearNamedDraftPdfFailureFlag(vorgangId: string): void {
   if (changed) {
     saveNamedDrafts(drafts);
   }
+}
+
+/**
+ * Stellt Unterschriften-Pads aus dem gespeicherten Entwurf wieder her
+ * (z.B. nach PDF-Fehler, wenn Canvases während der Erzeugung geleert wurden).
+ */
+function restoreSignaturePadsFromSaved(saved: SignaturesDraft | null | undefined): void {
+  if (!saved) {
+    return;
+  }
+  signatureDatum = saved.signatureDatum;
+  vermieterDruckbuchstaben = saved.vermieterDruckbuchstaben;
+  mieterDruckbuchstaben = saved.mieterDruckbuchstaben;
+  zeugeName = saved.zeugeName;
+  zeugeAnschrift = saved.zeugeAnschrift;
+
+  const datumInput = document.getElementById("standard-signature-datum") as HTMLInputElement | null;
+  if (datumInput) {
+    datumInput.value = signatureDatum;
+  }
+  const schluesselDatum = document.getElementById("schluessel-signature-datum") as HTMLInputElement | null;
+  if (schluesselDatum) {
+    schluesselDatum.value = signatureDatum;
+  }
+
+  if (saved.vermieterSignaturePng && vermieterSignaturePad) {
+    vermieterSignaturePad.loadFromDataURL(saved.vermieterSignaturePng);
+  }
+  if (saved.mieterSignaturePng && mieterSignaturePad) {
+    mieterSignaturePad.loadFromDataURL(saved.mieterSignaturePng);
+  }
+  if (saved.zeugeSignaturePng && zeugeSignaturePad) {
+    zeugeSignaturePad.loadFromDataURL(saved.zeugeSignaturePng);
+  }
+}
+
+/**
+ * Bei PDF-Fehler: Formular inkl. Unterschriften aus dem Abschluss-Snapshot
+ * sichern — niemals erneut aus den (ggf. geleerten) Pads lesen.
+ */
+function preserveProtocolAfterPdfFailure(
+  context: { objektart: Objektart; protokollart: Protokollart },
+  formSnapshot: FormDraft,
+  vorgangId: string,
+  failureMessage?: string
+): void {
+  const formCopy = JSON.parse(JSON.stringify(formSnapshot)) as FormDraft;
+  saveFormDraft(context.objektart, context.protokollart, formCopy);
+  upsertNamedDraftAfterPdfFailure(context, formCopy, vorgangId, failureMessage);
+  removeSavedProtocolWithoutCompanyPdf(vorgangId);
+  restoreSignaturePadsFromSaved(formCopy.signatures);
 }
 
 function deleteSavedProtocol(protocolId: string): void {
@@ -3455,10 +3506,27 @@ async function computeVorgangMediaNaming(
 
     let photoCount = 0;
     let videoCount = 0;
-    records.forEach((record) => {
+    for (const record of records) {
       const indexWithinKind = record.kind === "photo" ? (photoCount += 1) : (videoCount += 1);
       const kindLabel = record.kind === "photo" ? "Foto" : "Video";
       const ext = extensionFor(record.mimeType, record.kind);
+      // Sofort Bytes ablösen (wie Upload-Pfad): Safari/WebKit invalidiert
+      // IndexedDB-Blobs nach Transaktionsende — sonst scheitert oft gerade
+      // das zuerst gelesene Raumfoto (häufig Flur) beim späteren PDF-Einbetten.
+      let blob = record.blob;
+      if (record.kind === "photo") {
+        try {
+          const fresh = await loadMediaForUpload(record.id);
+          if (fresh?.blob) {
+            blob = fresh.blob;
+          }
+        } catch (error) {
+          console.warn(
+            `[vorgang-naming] Foto-Blob konnte nicht abgelöst werden (${room.label} ${String(indexWithinKind).padStart(2, "0")}):`,
+            error
+          );
+        }
+      }
       entries.push({
         mediaId: record.id,
         ownerKey: room.ownerKey,
@@ -3467,9 +3535,9 @@ async function computeVorgangMediaNaming(
         kind: record.kind,
         indexWithinKind,
         filename: `${roomPrefix}-${room.label}-${kindLabel}-${String(indexWithinKind).padStart(2, "0")}${ext}`,
-        blob: record.blob,
+        blob,
       });
-    });
+    }
   }
 
   return entries;
@@ -4185,7 +4253,9 @@ async function finishProtocolAsPdf(): Promise<void> {
 
   // Abschluss: „Gespeicherte Protokolle“ erst nach erfolgreicher Firmen-PDF lokal.
   // Bei pdf-failed bleibt der Vorgang unter „Entwürfe“.
-  syncCurrentFormToSessionDraft();
+  // Snapshot inkl. Unterschriften JETZT sichern (Pads noch sichtbar/gültig),
+  // bevor der Transfer-Banner das Formular ausblendet.
+  const formSnapshot = syncCurrentFormToSessionDraft() ?? form;
 
   const finishButton = signatureContainer.querySelector(
     ".btn-finish-pdf"
@@ -4202,7 +4272,7 @@ async function finishProtocolAsPdf(): Promise<void> {
   let protocolPdfInput: ProtocolPdfInput | null = null;
   console.log("[finishProtocolAsPdf] PDF generation started");
   try {
-    protocolPdfInput = buildProtocolPdfInput(context.objektart, context.protokollart, form);
+    protocolPdfInput = buildProtocolPdfInput(context.objektart, context.protokollart, formSnapshot);
     completionMieterPdf = generateAndDownloadProtocolPdf(protocolPdfInput);
     mieterPdfOk = true;
     console.log(
@@ -4235,7 +4305,7 @@ async function finishProtocolAsPdf(): Promise<void> {
   // Medien selbst.
   let mediaNaming: VorgangMediaNamingEntry[] = [];
   try {
-    mediaNaming = await computeVorgangMediaNaming(sessionKey, context.objektart, form);
+    mediaNaming = await computeVorgangMediaNaming(sessionKey, context.objektart, formSnapshot);
     console.log(
       `[vorgang-naming] Berechnete Datei-Nummerierung (${mediaNaming.length} Datei(en)):`,
       mediaNaming.map((entry) => entry.filename)
@@ -4281,7 +4351,7 @@ async function finishProtocolAsPdf(): Promise<void> {
       sessionKey,
       completionCompanyPdf,
       context,
-      form,
+      formSnapshot,
       null,
       false
     );
@@ -4305,14 +4375,14 @@ async function finishProtocolAsPdf(): Promise<void> {
       "[finishProtocolAsPdf] Skipping uploadProtocolArchive — Firmen-PDF fehlt oder wurde lokal nicht gespeichert."
     );
     // Formular, Medien und Unterschriften bleiben erhalten → Entwurf, nicht Archiv.
-    syncCurrentFormToSessionDraft();
-    upsertNamedDraftAfterPdfFailure(
+    // Wichtig: NICHT syncCurrentFormToSessionDraft() — Pads können nach der
+    // PDF-Arbeit leer sein und würden sonst die gespeicherten Unterschriften überschreiben.
+    preserveProtocolAfterPdfFailure(
       context,
-      form,
+      formSnapshot,
       sessionKey,
       pdfFailureDetail ?? undefined
     );
-    removeSavedProtocolWithoutCompanyPdf(sessionKey);
     if (finishButton) {
       finishButton.disabled = false;
     }
@@ -4336,8 +4406,8 @@ async function finishProtocolAsPdf(): Promise<void> {
       vorgangsnummer = numberResult.vorgangsnummer;
       pdfFilename = buildVorgangPdfFilename(
         vorgangsnummer,
-        form.kopfdaten.mietername,
-        form.kopfdaten.wohnungsnummerLage
+        formSnapshot.kopfdaten.mietername,
+        formSnapshot.kopfdaten.wohnungsnummerLage
       );
       pdfRemoteSubdir = buildVorgangRemoteSubdir(context.objektart, context.protokollart, numberResult.jahr);
       console.log(
@@ -4384,7 +4454,7 @@ async function finishProtocolAsPdf(): Promise<void> {
       sessionKey,
       { filename: archivePdfFilename || completionCompanyPdf.filename, base64: completionCompanyPdf.base64 },
       context,
-      form,
+      formSnapshot,
       vorgangsnummer,
       completionKind === "success"
     );
@@ -4540,7 +4610,8 @@ async function finishSchluesselAsPdf(): Promise<void> {
 
   // Abschluss: „Gespeicherte Protokolle“ erst nach erfolgreicher lokaler PDF
   // (gleiche Architektur wie Privat/Gewerbe/Garage). Bei pdf-failed → Entwürfe.
-  syncCurrentFormToSessionDraft();
+  // Snapshot inkl. Unterschriften bevor der Transfer-Banner das Formular ausblendet.
+  const formSnapshot = syncCurrentFormToSessionDraft() ?? form;
 
   const finishButton = schluesselSignatureContainer.querySelector(
     ".btn-finish-pdf"
@@ -4557,7 +4628,7 @@ async function finishSchluesselAsPdf(): Promise<void> {
   let pdfFailureDetail: string | null = null;
   console.log("[finishSchluesselAsPdf] PDF generation started");
   try {
-    completionMieterPdf = generateAndDownloadSchluesselPdf(buildSchluesselPdfInput(context.protokollart, form));
+    completionMieterPdf = generateAndDownloadSchluesselPdf(buildSchluesselPdfInput(context.protokollart, formSnapshot));
     mieterPdfOk = true;
     console.log(
       `[finishSchluesselAsPdf] PDF generated successfully (filename=${completionMieterPdf.filename}, base64Length=${completionMieterPdf.base64.length})`
@@ -4581,7 +4652,7 @@ async function finishSchluesselAsPdf(): Promise<void> {
       sessionKey,
       completionMieterPdf,
       context,
-      form,
+      formSnapshot,
       null,
       false
     );
@@ -4604,14 +4675,12 @@ async function finishSchluesselAsPdf(): Promise<void> {
     console.warn(
       "[finishSchluesselAsPdf] Skipping uploadProtocolArchive — PDF fehlt oder wurde lokal nicht gespeichert."
     );
-    syncCurrentFormToSessionDraft();
-    upsertNamedDraftAfterPdfFailure(
+    preserveProtocolAfterPdfFailure(
       context,
-      form,
+      formSnapshot,
       sessionKey,
       pdfFailureDetail ?? undefined
     );
-    removeSavedProtocolWithoutCompanyPdf(sessionKey);
     if (finishButton) {
       finishButton.disabled = false;
     }
@@ -4625,8 +4694,8 @@ async function finishSchluesselAsPdf(): Promise<void> {
       vorgangsnummer = numberResult.vorgangsnummer;
       pdfFilename = buildVorgangPdfFilename(
         vorgangsnummer,
-        form.schluessel?.mietername ?? "",
-        getGebaeudeLabel(form.schluessel?.gebaeudeAuswahl ?? "")
+        formSnapshot.schluessel?.mietername ?? "",
+        getGebaeudeLabel(formSnapshot.schluessel?.gebaeudeAuswahl ?? "")
       );
       pdfRemoteSubdir = buildVorgangRemoteSubdir(context.objektart, context.protokollart, numberResult.jahr);
       console.log(
@@ -4666,7 +4735,7 @@ async function finishSchluesselAsPdf(): Promise<void> {
       sessionKey,
       { filename: archivePdfFilename || completionMieterPdf.filename, base64: completionMieterPdf.base64 },
       context,
-      form,
+      formSnapshot,
       vorgangsnummer,
       completionKind === "success"
     );

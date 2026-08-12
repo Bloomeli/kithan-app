@@ -20,7 +20,7 @@
 
 // Bump this string on future deploys to force clients to purge the old cache
 // and re-fetch everything fresh (App-Shell + Bundle).
-const CACHE_VERSION = "v5";
+const CACHE_VERSION = "v6";
 const CACHE_NAME = `kithan-app-${CACHE_VERSION}`;
 const SW_TAG = `[service-worker ${CACHE_VERSION}]`;
 

@@ -345,15 +345,55 @@ export interface ProtocolPdfCompanyRoom {
 async function loadPhotoCanvasAutoOriented(blob: Blob): Promise<HTMLCanvasElement> {
   // Safari/WebKit: IndexedDB-Blobs nach geschlossener Transaktion oft nicht
   // mehr dekodierbar — Bytes zuerst ablösen (gleiche Idee wie loadMediaForUpload).
-  const mimeType = blob.type || "image/jpeg";
-  const buffer = await blob.arrayBuffer();
+  const rawType = (blob.type || "").toLowerCase();
+  const mimeType = rawType.startsWith("image/") ? rawType : "image/jpeg";
+  let buffer: ArrayBuffer;
+  try {
+    buffer = await blob.arrayBuffer();
+  } catch (error) {
+    throw new Error(
+      `Foto-Bytes nicht lesbar (type=${blob.type || "(leer)"}, size=${blob.size}): ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+  if (!buffer.byteLength) {
+    throw new Error(`Foto-Blob ist leer (type=${blob.type || "(leer)"}).`);
+  }
   const safeBlob = new Blob([buffer.slice(0)], { type: mimeType });
+
+  // Bevorzugt createImageBitmap (robuster bei MIME/Safari), sonst <img>.
+  if (typeof createImageBitmap === "function") {
+    try {
+      const bitmap = await createImageBitmap(safeBlob);
+      const canvas = document.createElement("canvas");
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        bitmap.close();
+        throw new Error("2D-Kontext für PDF-Fotoverarbeitung nicht verfügbar.");
+      }
+      ctx.drawImage(bitmap, 0, 0);
+      bitmap.close();
+      if (canvas.width < 1 || canvas.height < 1) {
+        throw new Error("Ungültige Bildabmessungen.");
+      }
+      return canvas;
+    } catch {
+      // Fallback auf Image-Element unten.
+    }
+  }
+
   const url = URL.createObjectURL(safeBlob);
   try {
     const image = await new Promise<HTMLImageElement>((resolve, reject) => {
       const el = new Image();
       el.onload = () => resolve(el);
-      el.onerror = () => reject(new Error("Foto konnte nicht dekodiert werden."));
+      el.onerror = () =>
+        reject(
+          new Error(`Foto konnte nicht dekodiert werden (mime=${mimeType}, bytes=${buffer.byteLength}).`)
+        );
       el.src = url;
     });
     const width = image.naturalWidth || image.width;
