@@ -2199,7 +2199,10 @@ function createElectricityCard(
   showRemove: boolean,
   onRemove: () => void
 ): HTMLDivElement {
-  const { card, body, collapse } = createCollapsibleRoomCard(`Stromzähler ${index + 1}`, "meter-karte");
+  const { card, body, collapse } = createCollapsibleRoomCard(
+    `Stromzähler ${String(index + 1).padStart(2, "0")}`,
+    "meter-karte"
+  );
 
   const media = createCardMediaControls(
     getMediaSessionKey,
@@ -2292,7 +2295,7 @@ function createStandardMeterCard(
   onRemove: () => void
 ): HTMLDivElement {
   const { card, body, collapse } = createCollapsibleRoomCard(
-    `${config.title} ${index + 1}`,
+    `${config.title} ${String(index + 1).padStart(2, "0")}`,
     "meter-karte"
   );
 

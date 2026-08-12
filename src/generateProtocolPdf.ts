@@ -512,15 +512,22 @@ function writeProtocolBody(
     writer.addWrapped("Keine Zählerstände erfasst.");
   } else {
     input.electricityMeters.forEach((meter, index) => {
-      writer.addSubsection(`Stromzähler ${index + 1}`);
+      writer.addSubsection(`Stromzähler ${String(index + 1).padStart(2, "0")}`);
       writer.addLine("Zählernummer", meter.meterNumber);
       writer.addLine("HT", meter.htReading);
       writer.addLine("NT", meter.ntReading);
       writer.addLine("Bemerkungen", meter.notes);
       writer.addBlank(2);
     });
-    input.standardMeters.forEach((meter, index) => {
-      writer.addSubsection(`${meter.title} ${index + 1}`);
+    // Nummerierung nur innerhalb derselben Zähler-Kategorie (title),
+    // nicht über die flache Gesamtliste aller Standard-Zähler hinweg —
+    // sonst würde z.B. der erste Warmwasserzähler fälschlich als
+    // "Warmwasser 4" erscheinen, wenn davor Gas/WMZ/Kaltwasser stehen.
+    const standardMeterIndexByTitle = new Map<string, number>();
+    input.standardMeters.forEach((meter) => {
+      const nextIndex = (standardMeterIndexByTitle.get(meter.title) ?? 0) + 1;
+      standardMeterIndexByTitle.set(meter.title, nextIndex);
+      writer.addSubsection(`${meter.title} ${String(nextIndex).padStart(2, "0")}`);
       if (meter.location !== undefined) {
         writer.addLine("Bezeichnung/Standort", meter.location);
       }
