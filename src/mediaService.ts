@@ -39,6 +39,8 @@ export interface CaptureMediaInput {
   ownerLabel?: string;
   objektart?: string;
   protokollart?: string;
+  /** Standard: Buchstaben (Flur_A). Schlüssel: Zahlen (Schlüssel 01). */
+  numericSequence?: boolean;
 }
 
 export interface CaptureMediaResult {
@@ -189,7 +191,9 @@ export async function captureAndStoreMedia(input: CaptureMediaInput): Promise<Ca
         ownerSequence = Math.max(highestSequence, sameKind.length) + 1;
         const ext = extensionFor(processed.mimeType, processed.kind);
         const namePart = sanitizeOwnerLabelForFilename(room);
-        friendlyFilename = `${namePart}_${sequenceLetter(ownerSequence)}${ext}`;
+        friendlyFilename = input.numericSequence
+          ? `${namePart} ${String(ownerSequence).padStart(2, "0")}${ext}`
+          : `${namePart}_${sequenceLetter(ownerSequence)}${ext}`;
       } catch (error) {
         console.warn(
           "[mediaService] Sequenz-Nummerierung fehlgeschlagen — Foto wird trotzdem mit protocolId+Raum gespeichert",

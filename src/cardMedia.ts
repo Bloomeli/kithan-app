@@ -323,7 +323,8 @@ function bindMediaControls(
   photoInput: HTMLInputElement,
   videoInput: HTMLInputElement,
   getLabel?: () => string,
-  getBinding?: () => { objektart?: string; protokollart?: string } | null
+  getBinding?: () => { objektart?: string; protokollart?: string } | null,
+  numericSequence?: boolean
 ): () => Promise<void> {
   const errorEl = document.createElement("p");
   errorEl.className = "media-capture-error hidden";
@@ -462,6 +463,7 @@ function bindMediaControls(
         ownerLabel: getLabel?.(),
         objektart: binding?.objektart,
         protokollart: binding?.protokollart,
+        numericSequence: numericSequence === true,
       });
       mediaId = result.record.id;
     } catch (error) {
@@ -541,12 +543,16 @@ export function createCardMediaControls(
   getSessionKey: () => string | null,
   ownerKey: string,
   getLabel?: () => string,
-  getBinding?: () => { objektart?: string; protokollart?: string } | null
+  getBinding?: () => { objektart?: string; protokollart?: string } | null,
+  options?: { photoOnly?: boolean; numericSequence?: boolean }
 ): CardMediaControls {
   const root = document.createElement("div");
   root.className = "card-media";
 
   const { actions, photoButton, videoButton, photoInput, videoInput } = createMediaActionButtons();
+  if (options?.photoOnly) {
+    videoButton.hidden = true;
+  }
   const thumbs = document.createElement("div");
   thumbs.className = "media-thumb-list";
 
@@ -562,7 +568,8 @@ export function createCardMediaControls(
     photoInput,
     videoInput,
     getLabel,
-    getBinding
+    getBinding,
+    options?.numericSequence === true
   );
 
   return { root, reload };

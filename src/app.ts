@@ -9,6 +9,8 @@ import {
   generateAndDownloadProtocolPdf,
   generateAndDownloadSchluesselPdf,
   generateCompanyProtocolPdf,
+  generateCompanySchluesselPdf,
+  type ProtocolPdfBoundPhoto,
   type ProtocolPdfCompanyRoom,
   type ProtocolPdfInput,
   type ProtocolPdfKeyLine,
@@ -1998,6 +2000,8 @@ let protocolEmailTo = "";
 let completionMieterPdf: { filename: string; base64: string } | null = null;
 
 const MAX_SCHLUESSEL_ENTRIES = 2;
+const SCHLUESSEL_MEDIA_OWNER_KEY = "schluessel";
+const SCHLUESSEL_MEDIA_LABEL = "Schlüssel";
 let weitereRaumState: WeitereRaumEntry[] = [];
 
 const MAX_BUERO_ROOMS = 6;
@@ -2139,6 +2143,7 @@ const viewFormular = requireElement<HTMLDivElement>("view-formular");
 const formStandard = requireElement<HTMLDivElement>("form-standard");
 const formSchluessel = requireElement<HTMLDivElement>("form-schluessel");
 const schluesselEntriesContainer = requireElement<HTMLDivElement>("schluessel-entries-container");
+const schluesselMediaHost = requireElement<HTMLDivElement>("schluessel-media");
 const gewaehlteObjektartHeading = requireElement<HTMLHeadingElement>("gewaehlte-objektart");
 const appSubtitle = requireElement<HTMLParagraphElement>("app-subtitle");
 const appTitle = requireElement<HTMLHeadingElement>("app-title");
@@ -3650,6 +3655,55 @@ async function computeVorgangMediaNaming(
   return entries;
 }
 
+async function loadSchluesselPhotosForPdf(sessionKey: string): Promise<ProtocolPdfBoundPhoto[]> {
+  const records = await getMediaForOwner(sessionKey, SCHLUESSEL_MEDIA_OWNER_KEY);
+  const eligible = records
+    .filter((record) => record.kind === "photo")
+    .filter((record) =>
+      photoBelongsToSection(
+        {
+          sessionKey: record.sessionKey,
+          protocolId: record.protocolId,
+          ownerKey: record.ownerKey,
+          room: record.room || record.ownerLabel,
+        },
+        sessionKey,
+        SCHLUESSEL_MEDIA_OWNER_KEY,
+        SCHLUESSEL_MEDIA_LABEL
+      )
+    )
+    .sort((a, b) => {
+      const seqA = a.ownerSequence ?? 0;
+      const seqB = b.ownerSequence ?? 0;
+      if (seqA !== seqB) {
+        return seqA - seqB;
+      }
+      return a.createdAt - b.createdAt;
+    });
+
+  const photos: ProtocolPdfBoundPhoto[] = [];
+  for (let i = 0; i < eligible.length; i += 1) {
+    const record = eligible[i];
+    let blob = record.blob;
+    try {
+      const fresh = await loadMediaForUpload(record.id);
+      if (fresh?.blob) {
+        blob = fresh.blob;
+      }
+    } catch (error) {
+      console.warn("[schluessel-photos] Foto-Blob konnte nicht abgelöst werden:", error);
+    }
+    photos.push({
+      blob,
+      protocolId: record.protocolId || record.sessionKey,
+      room: (record.room || record.ownerLabel || SCHLUESSEL_MEDIA_LABEL).trim(),
+      ownerKey: record.ownerKey,
+      sequence: i + 1,
+    });
+  }
+  return photos;
+}
+
 function groupPhotosByRoomForCompanyPdf(entries: VorgangMediaNamingEntry[]): ProtocolPdfCompanyRoom[] {
   const rooms: ProtocolPdfCompanyRoom[] = [];
   for (const entry of entries) {
@@ -4138,11 +4192,11 @@ async function syncOneSavedProtocol(protocol: SavedProtocol): Promise<boolean> {
       pdfFilename = storedPdf.filename;
       pdfBase64 = storedPdf.base64;
     } else if (protocol.objektart === "schluessel") {
-      const pdf = generateAndDownloadSchluesselPdf(
-        buildSchluesselPdfInput(protocol.protokollart, protocol.form)
-      );
-      pdfFilename = pdf.filename;
-      pdfBase64 = pdf.base64;
+      const pdfInput = buildSchluesselPdfInput(protocol.protokollart, protocol.form);
+      const photos = await loadSchluesselPhotosForPdf(protocol.vorgangId);
+      const company = await generateCompanySchluesselPdf(pdfInput, photos, protocol.vorgangId);
+      pdfFilename = company.filename;
+      pdfBase64 = company.base64;
       await saveSavedProtocolPdf(protocol.vorgangId, pdfFilename, pdfBase64);
     } else {
       const pdfInput = buildProtocolPdfInput(protocol.objektart, protocol.protokollart, protocol.form);
@@ -4616,7 +4670,7 @@ async function finishSchluesselAsPdf(): Promise<void> {
   }
   if (schluesselData.mietername.trim() === "") {
     missingFields.push({
-      label: "Name der/des Mieter(s)",
+      label: "Name des Empfängers",
       focus: () => requireElement<HTMLInputElement>("schluessel-mietername").focus(),
     });
   }
@@ -4681,7 +4735,7 @@ async function finishSchluesselAsPdf(): Promise<void> {
   }
   if (mieterDruckbuchstaben.trim() === "") {
     missingFields.push({
-      label: "Name in Druckbuchstaben (Mieter)",
+      label: "Name in Druckbuchstaben (Schlüsselempfänger)",
       focus: () => {
         const el = document.getElementById("schluessel-mieter-druckbuchstaben");
         el?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -4691,7 +4745,7 @@ async function finishSchluesselAsPdf(): Promise<void> {
   }
   if (!mieterSignaturePad || mieterSignaturePad.isEmpty()) {
     missingFields.push({
-      label: "Unterschrift Mieter",
+      label: "Unterschrift Schlüsselempfänger",
       focus: () => {
         document
           .getElementById("schluessel-signature-mieter")
@@ -4741,9 +4795,11 @@ async function finishSchluesselAsPdf(): Promise<void> {
 
   let mieterPdfOk = false;
   let pdfFailureDetail: string | null = null;
+  let schluesselPdfInput: SchluesselPdfInput | null = null;
   console.log("[finishSchluesselAsPdf] PDF generation started");
   try {
-    completionMieterPdf = generateAndDownloadSchluesselPdf(buildSchluesselPdfInput(context.protokollart, formSnapshot));
+    schluesselPdfInput = buildSchluesselPdfInput(context.protokollart, formSnapshot);
+    completionMieterPdf = generateAndDownloadSchluesselPdf(schluesselPdfInput);
     mieterPdfOk = true;
     console.log(
       `[finishSchluesselAsPdf] PDF generated successfully (filename=${completionMieterPdf.filename}, base64Length=${completionMieterPdf.base64.length})`
@@ -4756,8 +4812,34 @@ async function finishSchluesselAsPdf(): Promise<void> {
       rawError: error,
     });
     completionMieterPdf = null;
+    schluesselPdfInput = null;
     mieterPdfOk = false;
     pdfFailureDetail = "PDF-Erstellung fehlgeschlagen – erneut abschließen";
+  }
+
+  if (mieterPdfOk && schluesselPdfInput) {
+    try {
+      const photos = await loadSchluesselPhotosForPdf(sessionKey);
+      completionMieterPdf = await generateCompanySchluesselPdf(
+        schluesselPdfInput,
+        photos,
+        sessionKey
+      );
+      console.log(
+        `[finishSchluesselAsPdf] Firmen-PDF generated successfully (filename=${completionMieterPdf.filename}, base64Length=${completionMieterPdf.base64.length}, Fotos=${photos.length})`
+      );
+    } catch (error) {
+      console.error(
+        "[finishSchluesselAsPdf] Firmen-PDF (mit Fotos) konnte nicht erstellt werden — kein Text-PDF-Fallback, kein Server-Upload:",
+        error
+      );
+      completionMieterPdf = null;
+      mieterPdfOk = false;
+      pdfFailureDetail =
+        error instanceof CompanyPhotoEmbedError
+          ? error.message
+          : "PDF-Erstellung fehlgeschlagen – erneut abschließen";
+    }
   }
 
   // Reihenfolge wie bei Wohnungsprotokollen: PDF erzeugen → lokal speichern → Upload.
@@ -4899,6 +4981,9 @@ function renderSignatureSection(
   datumGroup.append(datumLabel, datumInput);
   container.appendChild(datumGroup);
 
+  const mieterLabel = idPrefix === "schluessel" ? "Schlüsselempfänger" : "Mieter";
+  const mieterPlaceholder = idPrefix === "schluessel" ? "Name des Schlüsselempfängers" : "Name des Mieters";
+
   const vermieterDruck = createTextField(
     `${idPrefix}-vermieter-druckbuchstaben`,
     "Name in Druckbuchstaben",
@@ -4937,9 +5022,9 @@ function renderSignatureSection(
       mieterDruckbuchstaben = value;
       persistSignaturesFromState();
     },
-    "Name des Mieters"
+    mieterPlaceholder
   );
-  const mieter = createSignaturePadBlock("Mieter", `${idPrefix}-signature-mieter`, mieterDruck);
+  const mieter = createSignaturePadBlock(mieterLabel, `${idPrefix}-signature-mieter`, mieterDruck);
   container.appendChild(mieter.block);
   mieterSignaturePad = new SignaturePad(mieter.canvas);
   if (saved?.mieterSignaturePng) {
@@ -5213,6 +5298,19 @@ function restoreSchluessel(draft: FormDraft): void {
     schluesselEntryState = [emptySchluesselEntry()];
   }
   renderSchluesselEntries();
+  renderSchluesselMedia();
+}
+
+function renderSchluesselMedia(): void {
+  schluesselMediaHost.innerHTML = "";
+  const media = createCardMediaControls(
+    getMediaSessionKey,
+    SCHLUESSEL_MEDIA_OWNER_KEY,
+    () => SCHLUESSEL_MEDIA_LABEL,
+    getMediaBinding,
+    { photoOnly: true, numericSequence: true }
+  );
+  schluesselMediaHost.appendChild(media.root);
 }
 
 function clearSchluesselFields(): void {

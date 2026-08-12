@@ -276,7 +276,8 @@ function writeSignatureSection(
     zeugeName: string;
     zeugeAnschrift: string;
     zeugeSignaturePng: string | null;
-  }
+  },
+  recipientLabel = "Mieter"
 ): void {
   writer.addSection("Unterschriften");
   writer.addLine("Datum", formatDateDe(data.signatureDatum));
@@ -285,7 +286,7 @@ function writeSignatureSection(
   writer.addLine("Name in Druckbuchstaben", data.vermieterDruckbuchstaben);
   writer.addSignatureBody(data.vermieterSignaturePng);
 
-  writer.addSubsection("Mieter");
+  writer.addSubsection(recipientLabel);
   writer.addLine("Name in Druckbuchstaben", data.mieterDruckbuchstaben);
   writer.addSignatureBody(data.mieterSignaturePng);
 
@@ -705,7 +706,7 @@ export function generateAndDownloadSchluesselPdf(input: SchluesselPdfInput): { f
   writer.addLine("Protokollart", input.protokollartLabel);
 
   writer.addSection("Kopfdaten");
-  writer.addLine("Name des Mieters", input.mietername);
+  writer.addLine("Name des Empfängers", input.mietername);
   writer.addLine("Wohnung/Einheit", input.wohnungEinheit);
   if (input.wohnungsnummerLage) {
     writer.addLine("Wohnungsnummer / Lage", input.wohnungsnummerLage);
@@ -727,7 +728,7 @@ export function generateAndDownloadSchluesselPdf(input: SchluesselPdfInput): { f
   writer.addSection("Sonstiges/Bemerkungen");
   writer.addWrapped(textOrDash(input.bemerkungen));
 
-  writeSignatureSection(writer, input);
+  writeSignatureSection(writer, input, "Schlüsselempfänger");
 
   const filename = buildSchluesselFilename(input);
   const doc = writer.getDocument();
@@ -740,5 +741,78 @@ export function generateAndDownloadSchluesselPdf(input: SchluesselPdfInput): { f
   // Vollbild-PDF-Vorschau und unterbricht dadurch den direkt danach
   // startenden Server-Upload. Das PDF existiert nur noch als Base64 im
   // Speicher, für den FTPS-Upload und den Mieter-E-Mail-Versand.
+  return { filename, base64 };
+}
+
+/**
+ * Schlüssel-Firmen-PDF: gleicher Text wie generateAndDownloadSchluesselPdf,
+ * zusätzlich die dem Vorgang zugeordneten Fotos (Schlüssel 01, 02, …).
+ * Schlägt die Einbettung eines Fotos fehl, wird CompanyPhotoEmbedError geworfen.
+ */
+export async function generateCompanySchluesselPdf(
+  input: SchluesselPdfInput,
+  photos: ProtocolPdfBoundPhoto[],
+  currentProtocolId: string
+): Promise<ProtocolPdfBytes> {
+  const writer = new PdfWriter();
+
+  writer.addTitle(`Protokoll ${input.protokollartLabel} – Schlüssel`);
+  writer.addLine("Protokollart", input.protokollartLabel);
+
+  writer.addSection("Kopfdaten");
+  writer.addLine("Name des Empfängers", input.mietername);
+  writer.addLine("Wohnung/Einheit", input.wohnungEinheit);
+  if (input.wohnungsnummerLage) {
+    writer.addLine("Wohnungsnummer / Lage", input.wohnungsnummerLage);
+  }
+  writer.addLine("Datum", formatDateDe(input.besichtigungsdatum));
+
+  writer.addSection("Schlüssel");
+  if (input.entries.length === 0) {
+    writer.addWrapped("Keine Schlüsselangaben erfasst.");
+  } else {
+    input.entries.forEach((entry, index) => {
+      writer.addSubsection(`Schlüssel ${index + 1}`);
+      writer.addLine("Anzahl der Schlüssel", entry.anzahl);
+      writer.addLine("Schlüsselnummer", entry.schluesselnummer);
+      writer.addBlank(2);
+    });
+  }
+
+  const eligible = photos.filter((photo) =>
+    photoBelongsToSection(
+      {
+        sessionKey: photo.protocolId,
+        protocolId: photo.protocolId,
+        ownerKey: photo.ownerKey,
+        room: photo.room,
+      },
+      currentProtocolId,
+      "schluessel",
+      "Schlüssel"
+    )
+  );
+  for (let i = 0; i < eligible.length; i += 1) {
+    const photo = eligible[i];
+    const caption = `Schlüssel ${String(i + 1).padStart(2, "0")}`;
+    try {
+      await addSinglePhotoToPdf(writer, photo.blob, caption);
+    } catch (error) {
+      console.error(`[generateProtocolPdf] Schlüssel-PDF: Foto konnte nicht eingebettet werden (${caption}):`, error);
+      throw new CompanyPhotoEmbedError(caption);
+    }
+  }
+
+  writer.addSection("Sonstiges/Bemerkungen");
+  writer.addWrapped(textOrDash(input.bemerkungen));
+
+  writeSignatureSection(writer, input, "Schlüsselempfänger");
+
+  const filename = `Firma_${buildSchluesselFilename(input)}`;
+  const doc = writer.getDocument();
+  const dataUri = doc.output("datauristring") as string;
+  const comma = dataUri.indexOf(",");
+  const base64 = comma >= 0 ? dataUri.slice(comma + 1) : dataUri;
+  debugLogPdfHeader(`Schlüssel-Firmen-PDF ${filename}`, base64);
   return { filename, base64 };
 }
