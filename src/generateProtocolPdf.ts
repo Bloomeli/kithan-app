@@ -144,10 +144,47 @@ class PdfWriter {
     this.doc = new jsPDF({ unit: "mm", format: "a4" });
     this.doc.setFont("helvetica", "normal");
     this.doc.setFontSize(11);
+    this.addFirstPageLogo();
   }
 
   getDocument(): jsPDF {
     return this.doc;
+  }
+
+  /**
+   * KITHAN-Logo nur oben auf Seite 1. Weitere Seiten bleiben ohne Logo.
+   * Rein visuell — ändert keine Inhalte, Reihenfolge oder Upload-Logik.
+   */
+  private addFirstPageLogo(): void {
+    const centerX = PAGE_WIDTH / 2;
+    const roofTop = this.y;
+    const roofWidth = 22;
+    const roofHeight = 7;
+
+    this.doc.setDrawColor(0, 0, 0);
+    this.doc.setLineWidth(0.4);
+    this.doc.line(centerX - roofWidth / 2, roofTop + roofHeight, centerX, roofTop);
+    this.doc.line(centerX, roofTop, centerX + roofWidth / 2, roofTop + roofHeight);
+    this.doc.setLineWidth(0.32);
+    this.doc.line(centerX - (roofWidth - 3.6) / 2, roofTop + roofHeight - 0.2, centerX, roofTop + 1.3);
+    this.doc.line(centerX, roofTop + 1.3, centerX + (roofWidth - 3.6) / 2, roofTop + roofHeight - 0.2);
+
+    const textY = roofTop + roofHeight + 7;
+    this.doc.setFont("times", "bold");
+    this.doc.setFontSize(16);
+    this.doc.text("KITHAN", centerX, textY, { align: "center" });
+
+    const lineY0 = textY + 2.8;
+    const lineWidths = [16, 24, 32];
+    this.doc.setLineWidth(0.32);
+    lineWidths.forEach((width, index) => {
+      const y = lineY0 + index * 1.7;
+      this.doc.line(centerX - width / 2, y, centerX + width / 2, y);
+    });
+
+    this.doc.setFont("helvetica", "normal");
+    this.doc.setFontSize(11);
+    this.y = lineY0 + lineWidths.length * 1.7 + 8;
   }
 
   ensureSpace(neededMm: number): void {

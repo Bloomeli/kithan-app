@@ -4264,6 +4264,7 @@ async function syncOneSavedProtocol(protocol: SavedProtocol): Promise<boolean> {
       pdfFilename,
       pdfBase64,
       pdfRemoteSubdir,
+      mediaRemoteSubdir: protocol.objektart === "schluessel" ? pdfRemoteSubdir : undefined,
     });
     await persistFinishedProtocolPdfLocally(
       protocol.vorgangId,
@@ -4798,7 +4799,7 @@ async function finishSchluesselAsPdf(): Promise<void> {
   const numberedPdfFilename = buildVorgangPdfFilename(
     vorgangsnummer,
     formSnapshot.schluessel?.mietername ?? "",
-    getGebaeudeLabel(formSnapshot.schluessel?.gebaeudeAuswahl ?? "")
+    formSnapshot.schluessel?.wohnungsnummerLage ?? ""
   );
   const pdfRemoteSubdir = buildVorgangRemoteSubdir(
     context.objektart,
@@ -4915,6 +4916,7 @@ async function finishSchluesselAsPdf(): Promise<void> {
         pdfFilename,
         pdfBase64: completionMieterPdf.base64,
         pdfRemoteSubdir,
+        mediaRemoteSubdir: pdfRemoteSubdir,
       });
       console.log(
         `[finishSchluesselAsPdf] uploadProtocolArchive result (nach ${Math.round((Date.now() - uploadStartedAt) / 1000)}s):`,

@@ -19,6 +19,8 @@ export interface MediaUploadHooks {
    * die Blob-URL persistieren kann — siehe blobFtpsUpload.ts.
    */
   onBlobUploaded?: (info: { blobUrl: string; remoteFilename: string }) => void | Promise<void>;
+  /** Optionaler FTPS-Unterordner, z.B. "2026/Schlüssel/Übergabe". */
+  remoteSubdir?: string;
 }
 
 export interface MediaUploadAdapter {
@@ -69,6 +71,7 @@ class BlobFtpsUploadAdapter implements MediaUploadAdapter {
       // Dateiname (z.B. "Flur 01.jpg") statt des generischen Fallback-Namens.
       // Ältere Datensätze ohne dieses Feld laufen unverändert wie bisher.
       filename: record.friendlyFilename || undefined,
+      remoteSubdir: hooks?.remoteSubdir ?? remoteSubdirForSchluesselRecord(record),
       // Retry-ohne-Re-Upload: falls ein früherer Versuch den Blob-Upload
       // bereits erfolgreich abgeschlossen hatte (siehe pendingBlobUrl in
       // mediaStore.ts), wird hier direkt bei der FTPS-Übertragung angesetzt.
@@ -83,6 +86,16 @@ class BlobFtpsUploadAdapter implements MediaUploadAdapter {
 
     return { remotePath: result.remotePath };
   }
+}
+
+/** Nur Schlüssel: Fotos in denselben Vorgangsordner wie das PDF. Garage/Privat/Gewerbe unverändert. */
+function remoteSubdirForSchluesselRecord(record: MediaRecord): string | undefined {
+  if (record.objektart !== "schluessel") {
+    return undefined;
+  }
+  const jahr = new Date().getFullYear();
+  const protokollart = record.protokollart === "ruecknahme" ? "Rücknahme" : "Übergabe";
+  return `${jahr}/Schlüssel/${protokollart}`;
 }
 
 export function createUploadAdapter(
