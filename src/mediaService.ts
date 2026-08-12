@@ -5,6 +5,7 @@
 
 import {
   createMediaId,
+  getMediaForOwner,
   loadMediaForUpload,
   saveMedia,
   updateMediaUploadState,
@@ -14,6 +15,7 @@ import {
 import { processCapturedMedia } from "./mediaProcess";
 import { MEDIA_CONFIG } from "./mediaConfig";
 import { mediaUploadAdapter } from "./mediaUpload";
+import { extensionFor } from "./blobFtpsUpload";
 import {
   createMediaDiagContext,
   logStorageEstimate,
@@ -27,10 +29,26 @@ export interface CaptureMediaInput {
   ownerKey: string;
   kind: MediaKind;
   file: Blob;
+  /**
+   * Lesbare Bezeichnung des Formularbereichs, dem dieses Foto/Video gerade
+   * zugeordnet wird (z.B. "Flur", "Stromzähler 1") — wird von der jeweiligen
+   * Card beim Aufruf mitgegeben (siehe cardMedia.ts). Ohne Angabe verhält
+   * sich das Erfassen exakt wie bisher (kein Bereichs-Label/-Dateiname).
+   */
+  ownerLabel?: string;
 }
 
 export interface CaptureMediaResult {
   record: MediaRecord;
+}
+
+/**
+ * Bereichsname für Dateinamen: z.B. "Bad/WC" → "Bad-WC", damit kein
+ * Schrägstrich im Dateinamen landet. Nur für den Dateinamen; die gespeicherte
+ * ownerLabel bleibt die lesbare Formularbezeichnung.
+ */
+function sanitizeOwnerLabelForFilename(label: string): string {
+  return label.trim().replace(/\//g, "-");
 }
 
 function uploadEnabled(): boolean {
@@ -149,6 +167,38 @@ export async function captureAndStoreMedia(input: CaptureMediaInput): Promise<Ca
 
   try {
     const processed = await processCapturedMedia(input.kind, input.file, ctx);
+
+    // Schritt 2 (Foto-Benennung): Bereichszuordnung + fortlaufende Nummer
+    // werden bereits JETZT, beim Erfassen, berechnet und auf dem Datensatz
+    // gespeichert — nicht erst später beim Abschluss abgeleitet. Die Nummer
+    // basiert auf der höchsten bereits vergebenen Nummer in diesem Bereich +
+    // Medientyp (nicht auf der reinen Anzahl), damit ein zwischenzeitlich
+    // gelöschtes Foto keine doppelt vergebene Nummer für ein neues Foto
+    // verursachen kann.
+    let ownerLabel: string | undefined;
+    let ownerSequence: number | undefined;
+    let friendlyFilename: string | undefined;
+    if (input.ownerLabel?.trim()) {
+      ownerLabel = input.ownerLabel.trim();
+      try {
+        const existingForOwner = await getMediaForOwner(input.sessionKey, input.ownerKey);
+        const highestSequence = existingForOwner
+          .filter((existing) => existing.kind === processed.kind)
+          .reduce((max, existing) => Math.max(max, existing.ownerSequence ?? 0), 0);
+        ownerSequence = highestSequence + 1;
+        const ext = extensionFor(processed.mimeType, processed.kind);
+        const namePart = sanitizeOwnerLabelForFilename(ownerLabel);
+        friendlyFilename = `${namePart} ${String(ownerSequence).padStart(2, "0")}${ext}`;
+      } catch (error) {
+        // Nummerierung ist rein zusätzlich (Anzeige-/Dateiname) — schlägt sie
+        // fehl, wird trotzdem ganz normal wie bisher gespeichert/hochgeladen.
+        console.warn("[mediaService] Bereichs-Nummerierung fehlgeschlagen, Erfassung läuft ohne Bereichsname weiter", error);
+        ownerLabel = undefined;
+        ownerSequence = undefined;
+        friendlyFilename = undefined;
+      }
+    }
+
     const record: MediaRecord = {
       id: createMediaId(),
       sessionKey: input.sessionKey,
@@ -158,6 +208,9 @@ export async function captureAndStoreMedia(input: CaptureMediaInput): Promise<Ca
       blob: processed.blob,
       createdAt: Date.now(),
       uploadStatus: "pending",
+      ownerLabel,
+      ownerSequence,
+      friendlyFilename,
     };
     const saved = await saveMedia(record, ctx);
     await logStorageEstimate(ctx);

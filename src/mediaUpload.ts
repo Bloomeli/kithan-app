@@ -65,6 +65,10 @@ class BlobFtpsUploadAdapter implements MediaUploadAdapter {
       mediaId: record.id,
       mimeType: record.mimeType || record.blob.type || "application/octet-stream",
       blob: record.blob,
+      // Schritt 2 (Foto-Benennung): lesbarer, bereits beim Erfassen berechneter
+      // Dateiname (z.B. "Flur 01.jpg") statt des generischen Fallback-Namens.
+      // Ältere Datensätze ohne dieses Feld laufen unverändert wie bisher.
+      filename: record.friendlyFilename || undefined,
       // Retry-ohne-Re-Upload: falls ein früherer Versuch den Blob-Upload
       // bereits erfolgreich abgeschlossen hatte (siehe pendingBlobUrl in
       // mediaStore.ts), wird hier direkt bei der FTPS-Übertragung angesetzt.

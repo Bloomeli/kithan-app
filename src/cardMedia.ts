@@ -321,7 +321,8 @@ function bindMediaControls(
   photoButton: HTMLButtonElement,
   videoButton: HTMLButtonElement,
   photoInput: HTMLInputElement,
-  videoInput: HTMLInputElement
+  videoInput: HTMLInputElement,
+  getLabel?: () => string
 ): () => Promise<void> {
   const errorEl = document.createElement("p");
   errorEl.className = "media-capture-error hidden";
@@ -451,7 +452,13 @@ function bindMediaControls(
     clearCaptureError();
     let mediaId: string;
     try {
-      const result = await captureAndStoreMedia({ sessionKey, ownerKey, kind, file });
+      const result = await captureAndStoreMedia({
+        sessionKey,
+        ownerKey,
+        kind,
+        file,
+        ownerLabel: getLabel?.(),
+      });
       mediaId = result.record.id;
     } catch (error) {
       showCaptureError(error);
@@ -528,7 +535,8 @@ function createMediaActionButtons(): {
 
 export function createCardMediaControls(
   getSessionKey: () => string | null,
-  ownerKey: string
+  ownerKey: string,
+  getLabel?: () => string
 ): CardMediaControls {
   const root = document.createElement("div");
   root.className = "card-media";
@@ -547,7 +555,8 @@ export function createCardMediaControls(
     photoButton,
     videoButton,
     photoInput,
-    videoInput
+    videoInput,
+    getLabel
   );
 
   return { root, reload };
@@ -559,7 +568,8 @@ export function createRoomOkMediaRow(
   checked: boolean,
   onOkChange: (checked: boolean) => void,
   getSessionKey: () => string | null,
-  ownerKey: string
+  ownerKey: string,
+  getLabel?: () => string
 ): { row: HTMLDivElement; media: CardMediaControls } {
   const block = document.createElement("div");
   block.className = "room-ok-media-block";
@@ -601,7 +611,8 @@ export function createRoomOkMediaRow(
     photoButton,
     videoButton,
     photoInput,
-    videoInput
+    videoInput,
+    getLabel
   );
 
   return { row: block, media: { root: block, reload } };

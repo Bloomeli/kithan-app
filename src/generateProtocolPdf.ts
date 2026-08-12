@@ -443,7 +443,9 @@ async function addCompanyPhotoSections(writer: PdfWriter, rooms: ProtocolPdfComp
     }
     writer.addSubsection(room.label);
     for (let i = 0; i < room.photos.length; i += 1) {
-      const caption = `${room.label} – Foto ${i + 1}`;
+      // Schritt 2: gleiche Benennung wie beim Erfassen ("Flur 01", "Bad-WC 02").
+      const captionLabel = room.label.replace(/\//g, "-");
+      const caption = `${captionLabel} ${String(i + 1).padStart(2, "0")}`;
       try {
         await addSinglePhotoToPdf(writer, room.photos[i], caption);
       } catch (error) {

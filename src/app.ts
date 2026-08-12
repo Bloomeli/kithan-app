@@ -1657,7 +1657,8 @@ function createStaticRoomCard(raum: RaumConfig, number: number, roomDraft: RoomD
       });
     },
     getMediaSessionKey,
-    raum.id
+    raum.id,
+    () => raum.label
   );
   body.appendChild(okMediaRow);
 
@@ -1738,7 +1739,8 @@ function createWeitereRaumCard(
       persistWeitereRaeume();
     },
     getMediaSessionKey,
-    entry.id
+    entry.id,
+    () => `Weiterer Raum ${index + 1}`
   );
   body.appendChild(okMediaRow);
 
@@ -1852,7 +1854,8 @@ function createBueroRoomCard(
       persistBueroRooms();
     },
     getMediaSessionKey,
-    entry.id
+    entry.id,
+    () => `Büro ${index + 1}`
   );
   body.appendChild(okMediaRow);
 
@@ -1980,7 +1983,8 @@ function createGarageRoomCard(
       persistGarageRooms();
     },
     getMediaSessionKey,
-    entry.id
+    entry.id,
+    () => `Garage ${String(index + 1).padStart(2, "0")}`
   );
   body.appendChild(okMediaRow);
 
@@ -2197,7 +2201,11 @@ function createElectricityCard(
 ): HTMLDivElement {
   const { card, body, collapse } = createCollapsibleRoomCard(`Stromzähler ${index + 1}`, "meter-karte");
 
-  const media = createCardMediaControls(getMediaSessionKey, entry.id);
+  const media = createCardMediaControls(
+    getMediaSessionKey,
+    entry.id,
+    () => `Stromzähler ${String(index + 1).padStart(2, "0")}`
+  );
   media.root.classList.add("card-media--meter");
   body.appendChild(media.root);
 
@@ -2288,7 +2296,11 @@ function createStandardMeterCard(
     "meter-karte"
   );
 
-  const media = createCardMediaControls(getMediaSessionKey, entry.id);
+  const media = createCardMediaControls(
+    getMediaSessionKey,
+    entry.id,
+    () => `${config.title} ${String(index + 1).padStart(2, "0")}`
+  );
   media.root.classList.add("card-media--meter");
   body.appendChild(media.root);
 

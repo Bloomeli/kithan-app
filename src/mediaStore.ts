@@ -40,6 +40,17 @@ export interface MediaRecord {
   pendingBlobUrl?: string;
   /** Der bei diesem Blob-Upload verwendete Ziel-Dateiname (siehe pendingBlobUrl). */
   pendingRemoteFilename?: string;
+  /**
+   * Lesbare Bezeichnung des Formularbereichs (Raum oder Zähler), dem dieses
+   * Foto/Video zugeordnet wurde — z.B. "Flur", "Stromzähler 1". Wird bereits
+   * BEIM Erfassen gesetzt (siehe captureAndStoreMedia in mediaService.ts),
+   * nicht erst später abgeleitet.
+   */
+  ownerLabel?: string;
+  /** Fortlaufende Nummer INNERHALB dieses Bereichs + Medientyps (1-basiert), z.B. 1, 2, 3 — für "Flur 01", "Flur 02". */
+  ownerSequence?: number;
+  /** Fertig berechneter, lesbarer Ziel-Dateiname (z.B. "Flur 01.jpg") — wird beim Server-Upload verwendet, falls gesetzt. */
+  friendlyFilename?: string;
 }
 
 /**
@@ -63,6 +74,9 @@ interface StoredMediaRecord {
   remotePath?: string;
   pendingBlobUrl?: string;
   pendingRemoteFilename?: string;
+  ownerLabel?: string;
+  ownerSequence?: number;
+  friendlyFilename?: string;
 }
 
 const DB_NAME = "kithan-media";
@@ -218,7 +232,14 @@ async function detachBytes(
 
 function uploadFieldsFromStored(stored: StoredMediaRecord): Pick<
   MediaRecord,
-  "uploadStatus" | "uploadError" | "remotePath" | "pendingBlobUrl" | "pendingRemoteFilename"
+  | "uploadStatus"
+  | "uploadError"
+  | "remotePath"
+  | "pendingBlobUrl"
+  | "pendingRemoteFilename"
+  | "ownerLabel"
+  | "ownerSequence"
+  | "friendlyFilename"
 > {
   return {
     uploadStatus: stored.uploadStatus,
@@ -226,6 +247,9 @@ function uploadFieldsFromStored(stored: StoredMediaRecord): Pick<
     remotePath: stored.remotePath,
     pendingBlobUrl: stored.pendingBlobUrl,
     pendingRemoteFilename: stored.pendingRemoteFilename,
+    ownerLabel: stored.ownerLabel,
+    ownerSequence: stored.ownerSequence,
+    friendlyFilename: stored.friendlyFilename,
   };
 }
 
@@ -340,6 +364,9 @@ export async function saveMedia(
     remotePath: record.remotePath,
     pendingBlobUrl: record.pendingBlobUrl,
     pendingRemoteFilename: record.pendingRemoteFilename,
+    ownerLabel: record.ownerLabel,
+    ownerSequence: record.ownerSequence,
+    friendlyFilename: record.friendlyFilename,
   };
 
   // Attempt 1: detached Blob + plain metadata only
@@ -581,6 +608,10 @@ export async function updateMediaUploadState(
       state.pendingRemoteFilename !== undefined
         ? state.pendingRemoteFilename
         : existing.pendingRemoteFilename,
+    // Diese Funktion ändert nie die Bereichszuordnung/Benennung — unverändert übernehmen.
+    ownerLabel: existing.ownerLabel,
+    ownerSequence: existing.ownerSequence,
+    friendlyFilename: existing.friendlyFilename,
   };
 
   const blobRecord: StoredMediaRecord = {
