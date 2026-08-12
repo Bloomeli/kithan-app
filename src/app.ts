@@ -27,6 +27,7 @@ import {
   loadSavedProtocolPdf,
   openSavedProtocolPdfInViewer,
   saveSavedProtocolPdf,
+  shareSavedProtocolPdf,
 } from "./savedProtocolPdfStore";
 
 type Objektart = "schluessel" | "gewerbe" | "privat" | "garage";
@@ -1789,6 +1790,30 @@ function renderSavedProtocolsList(): void {
               })();
             });
             actions.appendChild(pdfButton);
+
+            const shareButton = document.createElement("button");
+            shareButton.type = "button";
+            shareButton.className = "main-btn";
+            shareButton.textContent = "Teilen / Exportieren";
+            shareButton.addEventListener("click", (event) => {
+              event.stopPropagation();
+              void (async () => {
+                const result = await shareSavedProtocolPdf(protocol.vorgangId);
+                if (result === "missing") {
+                  window.alert(
+                    "Für dieses Protokoll ist lokal keine Firmen-PDF gespeichert. Bitte das Formular öffnen und erneut abschließen."
+                  );
+                  return;
+                }
+                if (result === "failed") {
+                  window.alert(
+                    "Die PDF konnte nicht geteilt oder exportiert werden. Bitte erneut versuchen."
+                  );
+                }
+                // shared / downloaded / cancelled: kein weiterer Hinweis nötig
+              })();
+            });
+            actions.appendChild(shareButton);
           }
 
           if (protocol.serverFullySynced) {
@@ -3745,7 +3770,9 @@ function setProtocolFormBodyHidden(container: HTMLElement, hidden: boolean): voi
   }
 }
 
-function renderMieterEmailSection(parent: HTMLElement, mieterPdfOk: boolean): void {
+/** Vorerst nicht in der Abschluss-UI aufgerufen — Code bewusst belassen/exportiert. */
+export function renderMieterEmailSection(parent: HTMLElement, mieterPdfOk: boolean): void {
+  // Weitergabe der Firmen-PDF: „Teilen / Exportieren“ unter Gespeicherte Protokolle.
   const emailBlock = document.createElement("div");
   emailBlock.className = "protocol-email-block";
 
@@ -3911,7 +3938,9 @@ function renderCompletionTop(
   }
 
   if (resolvedKind !== "pdf-failed") {
-    renderMieterEmailSection(top, mieterPdfOk);
+    // Mieter-PDF-per-E-Mail nach Abschluss vorerst aus der UI genommen
+    // (renderMieterEmailSection bleibt im Code, wird hier nicht mehr aufgerufen).
+    // Weitergabe der Firmen-PDF: „Teilen / Exportieren“ unter Gespeicherte Protokolle.
     setProtocolFormBodyHidden(container, true);
   } else {
     setProtocolFormBodyHidden(container, false);
@@ -4462,10 +4491,9 @@ async function finishProtocolAsPdf(): Promise<void> {
   }
   refreshUnsyncedProtocolsStartupBanner();
 
-  // Only after all transfers finished: final message + email section (no form body).
-  // Die E-Mail an den Mieter (weiter unten in renderMieterEmailSection) nutzt
-  // weiterhin ausschließlich completionMieterPdf (Text, ohne Fotos/Videos) —
-  // daran ändert das neue Firmen-PDF nichts.
+  // Only after all transfers finished: final message (no form body).
+  // Mieter-PDF-per-E-Mail ist in der Abschluss-UI deaktiviert; Firmen-PDF-Weitergabe
+  // erfolgt über „Teilen / Exportieren“ unter Gespeicherte Protokolle.
   renderCompletionTop(
     formStandard,
     context.protokollart,

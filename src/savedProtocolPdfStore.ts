@@ -164,3 +164,67 @@ export async function openSavedProtocolPdfInViewer(vorgangId: string): Promise<b
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   return true;
 }
+
+export type ShareSavedProtocolPdfResult =
+  | "shared"
+  | "downloaded"
+  | "missing"
+  | "cancelled"
+  | "failed";
+
+/**
+ * Gibt die bereits lokal gespeicherte Firmen-PDF unverändert weiter
+ * (kein erneutes Erzeugen/Komprimieren/Einbetten). Nutzt auf unterstützten
+ * Geräten (iPhone/iPad Safari) das native Share-Sheet.
+ */
+export async function shareSavedProtocolPdf(vorgangId: string): Promise<ShareSavedProtocolPdfResult> {
+  const stored = await loadSavedProtocolPdf(vorgangId);
+  if (!stored?.base64) {
+    return "missing";
+  }
+
+  const binary = Uint8Array.from(atob(stored.base64), (c) => c.charCodeAt(0));
+  const file = new File([binary], stored.filename || `Protokoll_${vorgangId}.pdf`, {
+    type: "application/pdf",
+  });
+
+  const nav = navigator as Navigator & {
+    canShare?: (data: ShareData) => boolean;
+  };
+
+  const shareData: ShareData = {
+    files: [file],
+    title: file.name,
+  };
+
+  const canShareFiles =
+    typeof nav.share === "function" &&
+    (typeof nav.canShare !== "function" || nav.canShare(shareData));
+
+  if (canShareFiles) {
+    try {
+      await nav.share(shareData);
+      return "shared";
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return "cancelled";
+      }
+      // Fallback: Download der gleichen Bytes.
+    }
+  }
+
+  try {
+    const url = URL.createObjectURL(file);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = file.name;
+    link.rel = "noopener";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    return "downloaded";
+  } catch {
+    return "failed";
+  }
+}
