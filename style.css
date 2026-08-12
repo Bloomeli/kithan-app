@@ -852,6 +852,38 @@ body {
     color: var(--neon-purple);
 }
 
+/** Auffälliger als Erfolgsmeldung: App nicht schließen während Übertragung. */
+.protocol-completion-banner.is-transfer-warning {
+    border: 2px solid #ff8a00;
+    background: rgba(255, 80, 0, 0.18);
+    color: #ffb060;
+    font-weight: 700;
+    font-size: 1.05rem;
+}
+
+.unsynced-protocols-banner {
+    text-align: left;
+    margin: 0 0 18px;
+    padding: 14px 16px;
+    border-radius: 8px;
+    border: 2px solid #ff8a00;
+    background: rgba(255, 80, 0, 0.14);
+    color: #ffb060;
+}
+
+.unsynced-protocols-banner p {
+    margin: 0 0 12px;
+    font-size: 0.98rem;
+    line-height: 1.4;
+    font-weight: 600;
+}
+
+.unsynced-protocols-banner .main-btn {
+    margin: 0;
+    padding: 12px;
+    font-size: 0.95rem;
+}
+
 .protocol-completion-vorgangsnummer {
     margin: -8px 0 20px;
     font-size: 0.9rem;

@@ -1549,7 +1549,7 @@ function renderSavedProtocolsList(): void {
           sync.className = `saved-protocol-sync ${protocol.serverFullySynced ? "is-ok" : "is-pending"}`;
           sync.textContent = protocol.serverFullySynced
             ? "Server vollständig synchronisiert"
-            : "Noch nicht vollständig synchronisiert";
+            : "Abgeschlossen – noch nicht synchronisiert";
           card.appendChild(sync);
 
           const actions = document.createElement("div");
@@ -3474,17 +3474,6 @@ function buildSchluesselPdfInput(protokollart: Protokollart, form: FormDraft): S
   };
 }
 
-function completionKindLabel(protokollart: Protokollart): string {
-  return protokollart === "uebergabe" ? "Übergabe" : "Rücknahme";
-}
-
-/**
- * Vorgangs-Ordner auf dem Firmenserver, z.B. "2026/Privat/Übergabe" —
- * verwendet die bereits vorhandenen App-Bezeichnungen (OBJEKTART_LABELS/
- * PROTOKOLLART_LABELS), keine neuen Kürzel. "jahr" kommt vom Server (siehe
- * requestVorgangsnummer), nicht vom Client berechnet, damit Ordnerpfad und
- * Zähler-Datei garantiert dasselbe Jahr verwenden.
- */
 function buildVorgangRemoteSubdir(objektart: Objektart, protokollart: Protokollart, jahr: number): string {
   return `${jahr}/${OBJEKTART_LABELS[objektart]}/${PROTOKOLLART_LABELS[protokollart]}`;
 }
@@ -3598,13 +3587,19 @@ function renderMieterEmailSection(parent: HTMLElement, mieterPdfOk: boolean): vo
 
 /**
  * Banner + E-Mail-Bereich ganz oben im Formular (nach Abschluss aller Übertragungen).
+ * completionKind:
+ * - success: Server vollständig synchronisiert
+ * - offline: lokal abgeschlossen ohne Netz
+ * - interrupted: Upload abgebrochen/fehlgeschlagen
+ * - pdf-failed: Protokoll-PDF konnte lokal nicht erzeugt werden
  */
 function renderCompletionTop(
   container: HTMLElement,
   protokollart: Protokollart,
   archiveResult: ProtocolArchiveUploadResult | null,
   mieterPdfOk: boolean,
-  vorgangsnummer: string | null
+  vorgangsnummer: string | null,
+  completionKind: "success" | "offline" | "interrupted" | "pdf-failed" = "success"
 ): void {
   let top = document.getElementById("protocol-completion-top");
   if (!top) {
@@ -3614,53 +3609,51 @@ function renderCompletionTop(
   }
   top.innerHTML = "";
 
-  const kind = completionKindLabel(protokollart);
+  void protokollart;
   const banner = document.createElement("p");
   banner.className = "protocol-completion-banner";
   banner.setAttribute("role", "status");
 
   const archiveOk = archiveResult?.ok ?? false;
+  const resolvedKind =
+    completionKind !== "success"
+      ? completionKind
+      : !mieterPdfOk
+        ? "pdf-failed"
+        : archiveOk
+          ? "success"
+          : "interrupted";
 
-  if (archiveOk && mieterPdfOk) {
-    banner.textContent = `✅ ${kind} erfolgreich abgeschlossen. PDF, Fotos und Videos wurden erfolgreich auf den Firmenserver übertragen.`;
-  } else if (!mieterPdfOk) {
-    // Lokale PDF-Erstellung ist bereits gescheitert — es fand noch gar kein
-    // Netzwerk-Request statt (weder für Medien noch für das Protokoll-PDF).
+  if (resolvedKind === "success") {
+    banner.textContent = "✅ Protokoll wurde erfolgreich hochgeladen.";
+  } else if (resolvedKind === "offline") {
+    banner.classList.add("is-transfer-warning");
+    banner.textContent =
+      "Protokoll wurde lokal gespeichert. Keine Internetverbindung. Bitte laden Sie es auf den Firmenserver hoch, sobald Sie wieder online sind.";
+  } else if (resolvedKind === "pdf-failed") {
     console.error(
       "[renderCompletionTop] PDF-Erstellung selbst ist fehlgeschlagen — kein Upload-Request wurde ausgelöst. Siehe [finishProtocolAsPdf] Log oben für die Fehlerdetails."
     );
-    banner.classList.add("is-error");
+    banner.classList.add("is-transfer-warning");
     banner.textContent =
-      "⚠ Das PDF konnte nicht erstellt werden. Die Daten wurden lokal gespeichert; bitte erneut versuchen.";
+      "⚠ Das Protokoll-PDF konnte nicht erstellt werden. Die Daten wurden lokal gespeichert; bitte erneut versuchen.";
   } else {
-    // Medien-Upload (Fotos/Videos, /api/blob-upload-token + /api/ftps-transfer
-    // je Datei) und Protokoll-PDF-Upload (derselbe Weg, aber eigener Request
-    // für die PDF-Datei) sind unabhängige Requests — hier getrennt ausweisen,
-    // statt eines pauschalen "Server nicht erreichbar" für beides.
-    const mediaFailedCount = (archiveResult?.photoFailed ?? 0) + (archiveResult?.videoFailed ?? 0);
-    const mediaOk = mediaFailedCount === 0;
-    const pdfOk = archiveResult?.pdfUploaded ?? false;
-
     console.error(
-      `[renderCompletionTop] partial/failed archive upload — photoUploaded=${archiveResult?.photoUploaded} photoFailed=${archiveResult?.photoFailed} videoUploaded=${archiveResult?.videoUploaded} videoFailed=${archiveResult?.videoFailed} pdfUploaded=${archiveResult?.pdfUploaded}. See [protocol-archive]/[uploadMediaRecord]/[blob-ftps-upload] logs above for exact HTTP status/response per failed item.`
+      `[renderCompletionTop] interrupted archive upload — photoUploaded=${archiveResult?.photoUploaded} photoFailed=${archiveResult?.photoFailed} videoUploaded=${archiveResult?.videoUploaded} videoFailed=${archiveResult?.videoFailed} pdfUploaded=${archiveResult?.pdfUploaded}.`
     );
-
-    const lines: string[] = [];
-    lines.push(
-      mediaOk
-        ? "✅ Medien (Fotos/Videos) erfolgreich hochgeladen."
-        : `⚠ ${mediaFailedCount} Foto(s)/Video(s) konnten nicht zum Server übertragen werden und wurden lokal gespeichert.`
-    );
-    lines.push(
-      pdfOk
-        ? "✅ Protokoll-PDF erfolgreich auf den Firmenserver übertragen."
-        : "⚠ Protokoll konnte nicht zum Server übertragen werden und wurde lokal gespeichert."
-    );
-
-    banner.classList.add("is-error");
-    banner.textContent = lines.join("\n");
+    banner.classList.add("is-transfer-warning");
+    banner.textContent =
+      "Protokoll wurde lokal gespeichert. Bitte versuchen Sie später erneut hochzuladen.";
   }
   top.appendChild(banner);
+
+  const statusLine = document.createElement("p");
+  statusLine.className = `saved-protocol-sync ${resolvedKind === "success" ? "is-ok" : "is-pending"}`;
+  statusLine.textContent =
+    resolvedKind === "success"
+      ? "Server vollständig synchronisiert"
+      : "Abgeschlossen – noch nicht synchronisiert";
+  top.appendChild(statusLine);
 
   if (vorgangsnummer) {
     const vorgangsnummerLine = document.createElement("p");
@@ -3672,6 +3665,211 @@ function renderCompletionTop(
   renderMieterEmailSection(top, mieterPdfOk);
   setProtocolFormBodyHidden(container, true);
   top.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function isDeviceOnline(): boolean {
+  return typeof navigator === "undefined" ? true : navigator.onLine !== false;
+}
+
+function listUnsyncedSavedProtocols(): SavedProtocol[] {
+  return loadSavedProtocols().filter((protocol) => !protocol.serverFullySynced);
+}
+
+function refreshUnsyncedProtocolsStartupBanner(): void {
+  const banner = document.getElementById("unsynced-protocols-banner");
+  const text = document.getElementById("unsynced-protocols-banner-text");
+  const button = document.getElementById("btn-sync-pending-protocols") as HTMLButtonElement | null;
+  if (!banner || !text) {
+    return;
+  }
+  const pending = listUnsyncedSavedProtocols();
+  if (pending.length === 0) {
+    banner.classList.add("hidden");
+    return;
+  }
+  text.textContent = "Es gibt noch nicht vollständig synchronisierte Protokolle.";
+  banner.classList.remove("hidden");
+  if (button) {
+    button.disabled = false;
+    button.textContent = "Jetzt synchronisieren";
+  }
+}
+
+/**
+ * Erneute Server-Übertragung für lokal abgeschlossene, noch nicht synchronisierte
+ * Protokolle — nutzt die bestehende uploadProtocolArchive-/Blob-Logik unverändert.
+ */
+async function syncPendingSavedProtocols(): Promise<void> {
+  const button = document.getElementById("btn-sync-pending-protocols") as HTMLButtonElement | null;
+  const text = document.getElementById("unsynced-protocols-banner-text");
+  const pending = listUnsyncedSavedProtocols();
+  if (pending.length === 0) {
+    refreshUnsyncedProtocolsStartupBanner();
+    return;
+  }
+  if (!isDeviceOnline()) {
+    if (text) {
+      text.textContent =
+        "Keine Internetverbindung. Bitte synchronisieren Sie die Protokolle, sobald wieder eine Verbindung besteht.";
+    }
+    return;
+  }
+
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Wird synchronisiert…";
+  }
+  if (text) {
+    text.textContent =
+      "Bitte App nicht schließen. Protokolle werden hochgeladen. Es kann einige Minuten dauern.";
+  }
+
+  let syncedCount = 0;
+  for (const protocol of pending) {
+    const ok = await syncOneSavedProtocol(protocol);
+    if (ok) {
+      syncedCount += 1;
+    }
+  }
+
+  const stillPending = listUnsyncedSavedProtocols().length;
+  if (stillPending === 0) {
+    const banner = document.getElementById("unsynced-protocols-banner");
+    if (banner && text) {
+      banner.classList.remove("hidden");
+      text.textContent = `✅ ${syncedCount} Protokoll(e) vollständig synchronisiert.`;
+    }
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Alles synchronisiert";
+    }
+  } else {
+    if (text) {
+      text.textContent = `⚠ ${syncedCount} synchronisiert, ${stillPending} noch nicht vollständig synchronisiert.`;
+    }
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Jetzt synchronisieren";
+    }
+    refreshUnsyncedProtocolsStartupBanner();
+  }
+}
+
+async function syncOneSavedProtocol(protocol: SavedProtocol): Promise<boolean> {
+  if (!isDeviceOnline()) {
+    return false;
+  }
+
+  localStorage.setItem(vorgangIdKey(protocol.objektart, protocol.protokollart), protocol.vorgangId);
+
+  let pdfFilename: string;
+  let pdfBase64: string;
+  try {
+    if (protocol.objektart === "schluessel") {
+      const pdf = generateAndDownloadSchluesselPdf(
+        buildSchluesselPdfInput(protocol.protokollart, protocol.form)
+      );
+      pdfFilename = pdf.filename;
+      pdfBase64 = pdf.base64;
+    } else {
+      const pdfInput = buildProtocolPdfInput(protocol.objektart, protocol.protokollart, protocol.form);
+      let archivePdf = generateAndDownloadProtocolPdf(pdfInput);
+      try {
+        const naming = await computeVorgangMediaNaming(
+          protocol.vorgangId,
+          protocol.objektart,
+          protocol.form
+        );
+        const company = await generateCompanyProtocolPdf(
+          pdfInput,
+          groupPhotosByRoomForCompanyPdf(naming)
+        );
+        archivePdf = company;
+      } catch (error) {
+        console.warn(
+          "[syncOneSavedProtocol] Firmen-PDF fehlgeschlagen — Fallback auf textliches Protokoll-PDF",
+          error
+        );
+      }
+      pdfFilename = archivePdf.filename;
+      pdfBase64 = archivePdf.base64;
+    }
+  } catch (error) {
+    console.error("[syncOneSavedProtocol] Protokoll-PDF konnte nicht erzeugt werden", error);
+    return false;
+  }
+
+  let vorgangsnummer = protocol.vorgangsnummer.trim() || null;
+  let pdfRemoteSubdir: string | undefined;
+  const numberResult = await requestVorgangsnummer(protocol.vorgangId, protocol.objektart);
+  if (numberResult.ok && numberResult.vorgangsnummer && numberResult.jahr) {
+    vorgangsnummer = numberResult.vorgangsnummer;
+    const mietername =
+      protocol.objektart === "schluessel"
+        ? protocol.form.schluessel?.mietername ?? ""
+        : protocol.form.kopfdaten.mietername;
+    const wohnung =
+      protocol.objektart === "schluessel"
+        ? protocol.form.schluessel?.wohnungsnummerLage ?? ""
+        : protocol.form.kopfdaten.wohnungsnummerLage;
+    pdfFilename = buildVorgangPdfFilename(vorgangsnummer, mietername, wohnung);
+    pdfRemoteSubdir = buildVorgangRemoteSubdir(
+      protocol.objektart,
+      protocol.protokollart,
+      numberResult.jahr
+    );
+  }
+
+  await acquireUploadWakeLock();
+  try {
+    const result = await uploadProtocolArchive({
+      sessionKey: protocol.vorgangId,
+      pdfFilename,
+      pdfBase64,
+      pdfRemoteSubdir,
+    });
+    upsertSavedProtocol({
+      objektart: protocol.objektart,
+      protokollart: protocol.protokollart,
+      form: protocol.form,
+      vorgangId: protocol.vorgangId,
+      vorgangsnummer,
+      serverFullySynced: Boolean(result.ok),
+    });
+    return Boolean(result.ok);
+  } catch (error) {
+    console.error("[syncOneSavedProtocol] Upload fehlgeschlagen", error);
+    upsertSavedProtocol({
+      objektart: protocol.objektart,
+      protokollart: protocol.protokollart,
+      form: protocol.form,
+      vorgangId: protocol.vorgangId,
+      vorgangsnummer,
+      serverFullySynced: false,
+    });
+    return false;
+  } finally {
+    await releaseUploadWakeLock();
+  }
+}
+
+function showTransferInProgressBanner(container: HTMLElement): HTMLElement {
+  let top = document.getElementById("protocol-completion-top");
+  if (!top) {
+    top = document.createElement("div");
+    top.id = "protocol-completion-top";
+    container.insertBefore(top, container.firstChild);
+  }
+  top.innerHTML = "";
+  const waiting = document.createElement("p");
+  waiting.className = "protocol-completion-banner is-transfer-warning";
+  waiting.setAttribute("role", "status");
+  waiting.textContent =
+    "Bitte App nicht schließen. Protokoll wird hochgeladen. Es kann einige Minuten dauern.";
+  top.appendChild(waiting);
+  setProtocolFormBodyHidden(container, true);
+  top.scrollIntoView({ behavior: "smooth", block: "start" });
+  return top;
 }
 
 async function finishProtocolAsPdf(): Promise<void> {
@@ -3807,22 +4005,18 @@ async function finishProtocolAsPdf(): Promise<void> {
     finishButton.disabled = true;
   }
 
-  const kind = completionKindLabel(context.protokollart);
   hideDraftStatus();
-  let top = document.getElementById("protocol-completion-top");
-  if (!top) {
-    top = document.createElement("div");
-    top.id = "protocol-completion-top";
-    formStandard.insertBefore(top, formStandard.firstChild);
-  }
-  top.innerHTML = "";
-  const waiting = document.createElement("p");
-  waiting.className = "protocol-completion-banner";
-  waiting.textContent = `${kind} wird abgeschlossen… PDF, Fotos und Videos werden übertragen. Bitte warten.`;
-  top.appendChild(waiting);
-  // Hide the filled-in form immediately — only waiting banner (+ later email) stays.
-  setProtocolFormBodyHidden(formStandard, true);
-  top.scrollIntoView({ behavior: "smooth", block: "start" });
+  const sessionKey = getOrCreateVorgangId(context.objektart, context.protokollart);
+  // Sofort lokal als abgeschlossen (noch nicht synchronisiert) sichern — auch offline.
+  upsertSavedProtocol({
+    objektart: context.objektart,
+    protokollart: context.protokollart,
+    form,
+    vorgangId: sessionKey,
+    vorgangsnummer: null,
+    serverFullySynced: false,
+  });
+  showTransferInProgressBanner(formStandard);
 
   let mieterPdfOk = false;
   let protocolPdfInput: ProtocolPdfInput | null = null;
@@ -3852,11 +4046,6 @@ async function finishProtocolAsPdf(): Promise<void> {
     protocolPdfInput = null;
     mieterPdfOk = false;
   }
-
-  // Muss exakt der Schlüssel sein, unter dem die Fotos/Videos beim Aufnehmen
-  // gespeichert wurden (siehe getMediaSessionKey) — sonst findet der Archiv-
-  // Upload keine Medien.
-  const sessionKey = getOrCreateVorgangId(context.objektart, context.protokollart);
 
   // Schritt 5 des Architekturplans (Datei-/Raumnummerierung): liefert die
   // raum-/aufnahmereihenfolge-sortierten Medien-Einträge inkl. Blob. Wird ab
@@ -3903,7 +4092,24 @@ async function finishProtocolAsPdf(): Promise<void> {
 
   let archiveResult: ProtocolArchiveUploadResult | null = null;
   let vorgangsnummer: string | null = null;
-  if (mieterPdfOk && archivePdf) {
+  let completionKind: "success" | "offline" | "interrupted" | "pdf-failed" = "interrupted";
+
+  if (!mieterPdfOk || !archivePdf) {
+    completionKind = "pdf-failed";
+    console.warn(
+      "[finishProtocolAsPdf] Skipping uploadProtocolArchive entirely — mieterPdfOk is false (see PDF generation error above)."
+    );
+  } else if (!isDeviceOnline()) {
+    completionKind = "offline";
+    upsertSavedProtocol({
+      objektart: context.objektart,
+      protokollart: context.protokollart,
+      form,
+      vorgangId: sessionKey,
+      vorgangsnummer: null,
+      serverFullySynced: false,
+    });
+  } else {
     // Vorgangsnummer + Ordnerpfad VOR dem Upload anfordern, da der finale
     // PDF-Dateiname die Nummer bereits enthalten soll (z.B.
     // "0027_Müller_WH07.pdf" in "2026/Privat/Übergabe/"). Anders als bei
@@ -3959,10 +4165,7 @@ async function finishProtocolAsPdf(): Promise<void> {
     } finally {
       await releaseUploadWakeLock();
     }
-  } else {
-    console.warn(
-      "[finishProtocolAsPdf] Skipping uploadProtocolArchive entirely — mieterPdfOk is false (see PDF generation error above)."
-    );
+    completionKind = archiveResult?.ok ? "success" : "interrupted";
   }
 
   // Lokales Archiv „Gespeicherte Protokolle“ — unabhängig von Vercel Blob/FTPS.
@@ -3972,14 +4175,22 @@ async function finishProtocolAsPdf(): Promise<void> {
     form,
     vorgangId: sessionKey,
     vorgangsnummer,
-    serverFullySynced: Boolean(archiveResult?.ok && mieterPdfOk),
+    serverFullySynced: completionKind === "success",
   });
+  refreshUnsyncedProtocolsStartupBanner();
 
   // Only after all transfers finished: final message + email section (no form body).
   // Die E-Mail an den Mieter (weiter unten in renderMieterEmailSection) nutzt
   // weiterhin ausschließlich completionMieterPdf (Text, ohne Fotos/Videos) —
   // daran ändert das neue Firmen-PDF nichts.
-  renderCompletionTop(formStandard, context.protokollart, archiveResult, mieterPdfOk, vorgangsnummer);
+  renderCompletionTop(
+    formStandard,
+    context.protokollart,
+    archiveResult,
+    mieterPdfOk,
+    vorgangsnummer,
+    completionKind
+  );
 }
 
 async function finishSchluesselAsPdf(): Promise<void> {
@@ -4124,20 +4335,16 @@ async function finishSchluesselAsPdf(): Promise<void> {
   }
 
   hideDraftStatus();
-  let top = document.getElementById("protocol-completion-top");
-  if (!top) {
-    top = document.createElement("div");
-    top.id = "protocol-completion-top";
-    formSchluessel.insertBefore(top, formSchluessel.firstChild);
-  }
-  top.innerHTML = "";
-  const waiting = document.createElement("p");
-  waiting.className = "protocol-completion-banner";
-  waiting.textContent = "Schlüsselübergabe wird abgeschlossen… PDF wird übertragen. Bitte warten.";
-  top.appendChild(waiting);
-  // Hide the filled-in form immediately — only waiting banner (+ later email) stays.
-  setProtocolFormBodyHidden(formSchluessel, true);
-  top.scrollIntoView({ behavior: "smooth", block: "start" });
+  const sessionKey = getOrCreateVorgangId(context.objektart, context.protokollart);
+  upsertSavedProtocol({
+    objektart: context.objektart,
+    protokollart: context.protokollart,
+    form,
+    vorgangId: sessionKey,
+    vorgangsnummer: null,
+    serverFullySynced: false,
+  });
+  showTransferInProgressBanner(formSchluessel);
 
   let mieterPdfOk = false;
   console.log("[finishSchluesselAsPdf] PDF generation started");
@@ -4162,10 +4369,26 @@ async function finishSchluesselAsPdf(): Promise<void> {
   // gespeichert wurden (siehe getMediaSessionKey) — das Schlüssel-Formular
   // erfasst aktuell keine Fotos/Videos, uploadProtocolArchive lädt dann
   // schlicht 0 Fotos/0 Videos hoch und fährt direkt mit dem PDF fort.
-  const sessionKey = getOrCreateVorgangId(context.objektart, context.protokollart);
   let archiveResult: ProtocolArchiveUploadResult | null = null;
   let vorgangsnummer: string | null = null;
-  if (mieterPdfOk && completionMieterPdf) {
+  let completionKind: "success" | "offline" | "interrupted" | "pdf-failed" = "interrupted";
+
+  if (!mieterPdfOk || !completionMieterPdf) {
+    completionKind = "pdf-failed";
+    console.warn(
+      "[finishSchluesselAsPdf] Skipping uploadProtocolArchive entirely — mieterPdfOk is false (see PDF generation error above)."
+    );
+  } else if (!isDeviceOnline()) {
+    completionKind = "offline";
+    upsertSavedProtocol({
+      objektart: context.objektart,
+      protokollart: context.protokollart,
+      form,
+      vorgangId: sessionKey,
+      vorgangsnummer: null,
+      serverFullySynced: false,
+    });
+  } else {
     let pdfFilename = completionMieterPdf.filename;
     let pdfRemoteSubdir: string | undefined;
     const numberResult = await requestVorgangsnummer(sessionKey, context.objektart);
@@ -4205,10 +4428,7 @@ async function finishSchluesselAsPdf(): Promise<void> {
     } finally {
       await releaseUploadWakeLock();
     }
-  } else {
-    console.warn(
-      "[finishSchluesselAsPdf] Skipping uploadProtocolArchive entirely — mieterPdfOk is false (see PDF generation error above)."
-    );
+    completionKind = archiveResult?.ok ? "success" : "interrupted";
   }
 
   // Lokales Archiv „Gespeicherte Protokolle“ — unabhängig von Vercel Blob/FTPS.
@@ -4218,11 +4438,19 @@ async function finishSchluesselAsPdf(): Promise<void> {
     form,
     vorgangId: sessionKey,
     vorgangsnummer,
-    serverFullySynced: Boolean(archiveResult?.ok && mieterPdfOk),
+    serverFullySynced: completionKind === "success",
   });
+  refreshUnsyncedProtocolsStartupBanner();
 
   // Only after all transfers finished: final message + email section (no form body).
-  renderCompletionTop(formSchluessel, context.protokollart, archiveResult, mieterPdfOk, vorgangsnummer);
+  renderCompletionTop(
+    formSchluessel,
+    context.protokollart,
+    archiveResult,
+    mieterPdfOk,
+    vorgangsnummer,
+    completionKind
+  );
 }
 
 function renderSignatureSection(
@@ -4769,6 +4997,7 @@ function goBackToObjektartView(): void {
   setAppSubtitle(DEFAULT_SUBTITLE, false);
   setAppTitleVisible(true);
   showOnly(viewObjektart);
+  refreshUnsyncedProtocolsStartupBanner();
 }
 
 function resetToObjektartView(): void {
@@ -4840,6 +5069,13 @@ function initEventListeners(): void {
     goBackToObjektartView();
   });
 
+  const btnSyncPendingProtocols = document.getElementById(
+    "btn-sync-pending-protocols"
+  ) as HTMLButtonElement | null;
+  btnSyncPendingProtocols?.addEventListener("click", () => {
+    void syncPendingSavedProtocols();
+  });
+
   btnEntwurfSpeichern.addEventListener("click", () => {
     saveCurrentAsNamedDraft();
   });
@@ -4862,6 +5098,7 @@ function init(): void {
   populateGebaeudeSelect("schluessel-gebaeude-auswahl");
   initEventListeners();
   restoreSelection();
+  refreshUnsyncedProtocolsStartupBanner();
   // Safari/WebKit: verify Blob/ArrayBuffer IDB write path early (log-only).
   void runMediaDbSelfTest();
 }
