@@ -25,6 +25,7 @@
             <button class="main-btn" data-objektart="garage">Garage</button>
             <button class="main-btn" data-objektart="schluessel">Schlüssel</button>
             <button class="main-btn btn-drafts" id="btn-meine-entwuerfe" type="button">Meine Entwürfe</button>
+            <button class="main-btn btn-drafts" id="btn-gespeicherte-protokolle" type="button">Gespeicherte Protokolle</button>
         </div>
 
         <div id="view-protokollart" class="button-grid hidden">
@@ -39,6 +40,14 @@
             <p id="entwuerfe-empty" class="draft-empty hidden">Keine gespeicherten Entwürfe.</p>
             <div id="entwuerfe-list"></div>
             <button class="main-btn btn-back" id="btn-zurueck-entwuerfe" type="button">Zurück</button>
+        </div>
+
+        <div id="view-gespeicherte-protokolle" class="form-container hidden">
+            <h2 class="section-title" style="margin-top: 0;">Gespeicherte Protokolle</h2>
+            <p id="gespeicherte-protokolle-warning" class="saved-protocol-warning hidden" role="status"></p>
+            <p id="gespeicherte-protokolle-empty" class="draft-empty hidden">Keine gespeicherten Protokolle.</p>
+            <div id="gespeicherte-protokolle-list"></div>
+            <button class="main-btn btn-back" id="btn-zurueck-gespeicherte-protokolle" type="button">Zurück</button>
         </div>
 
         <div id="view-formular" class="form-container hidden">

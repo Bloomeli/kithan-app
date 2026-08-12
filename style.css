@@ -1065,3 +1065,94 @@ body {
 .draft-card-actions .btn-delete-draft {
     border-color: var(--neon-purple);
 }
+
+.saved-protocol-warning {
+    text-align: left;
+    margin: 0 0 16px;
+    padding: 12px;
+    border-radius: 8px;
+    border: 1px solid var(--neon-purple);
+    color: var(--neon-purple);
+    font-size: 0.95rem;
+}
+
+.saved-protocol-objektart {
+    margin: 0 0 18px;
+    text-align: left;
+}
+
+.saved-protocol-objektart-title {
+    margin: 0 0 8px;
+    color: var(--neon-green);
+    font-size: 1.1rem;
+}
+
+.saved-protocol-protokollart {
+    margin: 0 0 14px 8px;
+}
+
+.saved-protocol-protokollart-title {
+    margin: 0 0 8px;
+    color: #c8c8c8;
+    font-size: 0.98rem;
+    font-weight: 600;
+}
+
+.saved-protocol-card {
+    background-color: var(--dark-gray);
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 10px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.saved-protocol-card:focus-visible {
+    outline: 2px solid var(--neon-green);
+    outline-offset: 2px;
+}
+
+.saved-protocol-line {
+    margin: 0 0 4px;
+    color: var(--text-color);
+    font-size: 0.98rem;
+}
+
+.saved-protocol-line.is-primary {
+    color: var(--neon-green);
+    font-weight: 600;
+}
+
+.saved-protocol-sync {
+    margin: 8px 0 0;
+    font-size: 0.88rem;
+    color: #a0a0a0;
+}
+
+.saved-protocol-sync.is-ok {
+    color: var(--neon-green);
+}
+
+.saved-protocol-sync.is-pending {
+    color: var(--neon-purple);
+}
+
+.saved-protocol-card-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.saved-protocol-card-actions .main-btn {
+    padding: 10px;
+    font-size: 0.92rem;
+    margin: 0;
+}
+
+.saved-protocol-empty-slot {
+    margin: 0 0 8px;
+    color: #777;
+    font-size: 0.88rem;
+}

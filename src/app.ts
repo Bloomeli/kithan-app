@@ -366,6 +366,8 @@ const STORAGE_KEYS = {
   objektart: "kithan_objektart",
   protokollart: "kithan_protokollart",
   namedDrafts: "kithan_named_drafts",
+  /** Abgeschlossene Protokolle — rein lokal, unabhängig von Vercel Blob / FTPS. */
+  savedProtocols: "kithan_saved_protocols",
 } as const;
 
 const FORM_DRAFT_PREFIX = "kithan_form_";
@@ -377,6 +379,8 @@ const FORM_DRAFT_PREFIX = "kithan_form_";
 // eindeutigen sessionKey.
 const VORGANG_ID_PREFIX = "kithan_vorgang_id_";
 const MAX_NAMED_DRAFTS = 20;
+/** Nur Warnschwelle — niemals automatisches Löschen. */
+const SAVED_PROTOCOLS_WARN_COUNT = 30;
 
 interface RoomDraft {
   ok: boolean;
@@ -916,6 +920,187 @@ function saveNamedDrafts(drafts: NamedProtocolDraft[]): void {
   localStorage.setItem(STORAGE_KEYS.namedDrafts, JSON.stringify(drafts));
 }
 
+/**
+ * Abgeschlossenes Protokoll im lokalen Archiv „Gespeicherte Protokolle“.
+ * Vollständig unabhängig von Vercel Blob / FTPS / Cleanup — nur localStorage.
+ * Nicht mit NamedProtocolDraft (Meine Entwürfe) vermischen.
+ */
+interface SavedProtocol {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  objektart: Objektart;
+  protokollart: Protokollart;
+  /** Vierstellige Nummer ohne Jahreszahl, z.B. "0001". Leer, falls noch keine vergeben. */
+  vorgangsnummer: string;
+  /** ISO-Datum YYYY-MM-DD für die Anzeige (Besichtigungs-/Übergabedatum). */
+  datum: string;
+  adresse: string;
+  mietername: string;
+  form: FormDraft;
+  vorgangId: string;
+  /** true nur wenn Firmenserver-Übertragung eindeutig vollständig erfolgreich war. */
+  serverFullySynced: boolean;
+}
+
+const SAVED_PROTOCOL_OBJEKTART_ORDER: Objektart[] = ["privat", "gewerbe", "garage", "schluessel"];
+const SAVED_PROTOCOL_PROTOKOLLART_ORDER: Protokollart[] = ["uebergabe", "ruecknahme"];
+
+function loadSavedProtocols(): SavedProtocol[] {
+  const raw = localStorage.getItem(STORAGE_KEYS.savedProtocols);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw) as SavedProtocol[];
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter(
+      (item) =>
+        item &&
+        typeof item.id === "string" &&
+        isObjektart(item.objektart) &&
+        isProtokollart(item.protokollart) &&
+        item.form &&
+        typeof item.vorgangId === "string"
+    );
+  } catch {
+    return [];
+  }
+}
+
+function saveSavedProtocols(protocols: SavedProtocol[]): void {
+  localStorage.setItem(STORAGE_KEYS.savedProtocols, JSON.stringify(protocols));
+}
+
+function formatProtocolDateDe(isoDate: string): string {
+  if (!isoDate) {
+    return "—";
+  }
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate);
+  if (match) {
+    return `${match[3]}.${match[2]}.${match[1]}`;
+  }
+  return isoDate;
+}
+
+function extractSavedProtocolMeta(
+  objektart: Objektart,
+  form: FormDraft
+): { datum: string; adresse: string; mietername: string } {
+  if (objektart === "schluessel") {
+    const schluessel = form.schluessel ?? emptySchluesselDraft();
+    return {
+      datum: schluessel.besichtigungsdatum.trim() || form.signatures?.signatureDatum?.trim() || "",
+      adresse: getGebaeudeLabel(schluessel.gebaeudeAuswahl),
+      mietername: schluessel.mietername.trim(),
+    };
+  }
+  return {
+    datum: form.kopfdaten.besichtigungsdatum.trim() || form.signatures?.signatureDatum?.trim() || "",
+    adresse: getGebaeudeLabel(form.kopfdaten.gebaeudeAuswahl),
+    mietername: form.kopfdaten.mietername.trim(),
+  };
+}
+
+/**
+ * Speichert einen abgeschlossenen Vorgang lokal unter „Gespeicherte Protokolle“.
+ * Überschreibt niemals einen bereits vollständig synchronisierten Eintrag mit
+ * einem unvollständigeren Stand derselben Vorgangs-ID (Sicherheitsregel).
+ * Kein Bezug zu Vercel Blob — nur localStorage.
+ */
+function upsertSavedProtocol(input: {
+  objektart: Objektart;
+  protokollart: Protokollart;
+  form: FormDraft;
+  vorgangId: string;
+  vorgangsnummer: string | null;
+  serverFullySynced: boolean;
+}): void {
+  const protocols = loadSavedProtocols();
+  const now = new Date().toISOString();
+  const meta = extractSavedProtocolMeta(input.objektart, input.form);
+  const formCopy = JSON.parse(JSON.stringify(input.form)) as FormDraft;
+  const vorgangsnummer = (input.vorgangsnummer ?? "").trim();
+
+  const existingIndex = protocols.findIndex((item) => item.vorgangId === input.vorgangId && input.vorgangId !== "");
+
+  if (existingIndex >= 0) {
+    const existing = protocols[existingIndex];
+    // Niemals einen bereits bestätigten Sync-Status wieder auf „nicht synchronisiert“ zurücksetzen.
+    if (existing.serverFullySynced && !input.serverFullySynced) {
+      protocols[existingIndex] = {
+        ...existing,
+        updatedAt: now,
+        form: formCopy,
+        vorgangsnummer: vorgangsnummer || existing.vorgangsnummer,
+        datum: meta.datum || existing.datum,
+        adresse: meta.adresse || existing.adresse,
+        mietername: meta.mietername || existing.mietername,
+        serverFullySynced: true,
+      };
+    } else {
+      protocols[existingIndex] = {
+        ...existing,
+        updatedAt: now,
+        form: formCopy,
+        vorgangsnummer: vorgangsnummer || existing.vorgangsnummer,
+        datum: meta.datum || existing.datum,
+        adresse: meta.adresse || existing.adresse,
+        mietername: meta.mietername || existing.mietername,
+        serverFullySynced: existing.serverFullySynced || input.serverFullySynced,
+      };
+    }
+  } else {
+    protocols.unshift({
+      id: generateId("saved-protocol"),
+      createdAt: now,
+      updatedAt: now,
+      objektart: input.objektart,
+      protokollart: input.protokollart,
+      vorgangsnummer,
+      datum: meta.datum,
+      adresse: meta.adresse,
+      mietername: meta.mietername,
+      form: formCopy,
+      vorgangId: input.vorgangId || generateId("vorgang"),
+      serverFullySynced: input.serverFullySynced,
+    });
+  }
+
+  saveSavedProtocols(protocols);
+}
+
+function deleteSavedProtocol(protocolId: string): void {
+  const protocols = loadSavedProtocols();
+  const target = protocols.find((item) => item.id === protocolId);
+  if (!target) {
+    return;
+  }
+  // Sicherheitsregel: ohne bestätigte Server-Synchronisation nie löschen.
+  if (!target.serverFullySynced) {
+    window.alert(
+      "Dieses Protokoll ist noch nicht vollständig auf dem Firmenserver synchronisiert und darf lokal nicht gelöscht werden."
+    );
+    return;
+  }
+  saveSavedProtocols(protocols.filter((item) => item.id !== protocolId));
+  renderSavedProtocolsList();
+}
+
+function openSavedProtocol(protocolId: string): void {
+  const protocol = loadSavedProtocols().find((item) => item.id === protocolId);
+  if (!protocol) {
+    return;
+  }
+  saveFormDraft(protocol.objektart, protocol.protokollart, JSON.parse(JSON.stringify(protocol.form)) as FormDraft);
+  localStorage.setItem(vorgangIdKey(protocol.objektart, protocol.protokollart), protocol.vorgangId);
+  localStorage.setItem(STORAGE_KEYS.objektart, protocol.objektart);
+  localStorage.setItem(STORAGE_KEYS.protokollart, protocol.protokollart);
+  showFormular(protocol.objektart, protocol.protokollart);
+}
+
 function getGebaeudeLabel(value: string): string {
   if (!value) {
     return "";
@@ -1263,6 +1448,155 @@ function goToEntwuerfeView(): void {
   showOnly(viewEntwuerfe);
 }
 
+function renderSavedProtocolsList(): void {
+  gespeicherteProtokolleList.innerHTML = "";
+  const protocols = loadSavedProtocols();
+
+  if (protocols.length >= SAVED_PROTOCOLS_WARN_COUNT) {
+    gespeicherteProtokolleWarning.textContent =
+      "30 abgeschlossene Protokolle sind lokal gespeichert. Bitte prüfen Sie, welche bereits vollständig auf dem Firmenserver gesichert sind und lokal gelöscht werden können.";
+    gespeicherteProtokolleWarning.classList.remove("hidden");
+  } else {
+    gespeicherteProtokolleWarning.textContent = "";
+    gespeicherteProtokolleWarning.classList.add("hidden");
+  }
+
+  if (protocols.length === 0) {
+    gespeicherteProtokolleEmpty.classList.remove("hidden");
+    return;
+  }
+  gespeicherteProtokolleEmpty.classList.add("hidden");
+
+  SAVED_PROTOCOL_OBJEKTART_ORDER.forEach((objektart) => {
+    const objektartBlock = document.createElement("section");
+    objektartBlock.className = "saved-protocol-objektart";
+
+    const objektartTitle = document.createElement("h3");
+    objektartTitle.className = "saved-protocol-objektart-title";
+    objektartTitle.textContent = OBJEKTART_LABELS[objektart];
+    objektartBlock.appendChild(objektartTitle);
+
+    SAVED_PROTOCOL_PROTOKOLLART_ORDER.forEach((protokollart) => {
+      const slotProtocols = protocols
+        .filter((item) => item.objektart === objektart && item.protokollart === protokollart)
+        .sort((a, b) => {
+          const numA = a.vorgangsnummer || "";
+          const numB = b.vorgangsnummer || "";
+          if (numA && numB && numA !== numB) {
+            return numA.localeCompare(numB);
+          }
+          return b.updatedAt.localeCompare(a.updatedAt);
+        });
+
+      const protokollartBlock = document.createElement("div");
+      protokollartBlock.className = "saved-protocol-protokollart";
+
+      const protokollartTitle = document.createElement("h4");
+      protokollartTitle.className = "saved-protocol-protokollart-title";
+      protokollartTitle.textContent = PROTOKOLLART_LABELS[protokollart];
+      protokollartBlock.appendChild(protokollartTitle);
+
+      if (slotProtocols.length === 0) {
+        const emptySlot = document.createElement("p");
+        emptySlot.className = "saved-protocol-empty-slot";
+        emptySlot.textContent = "Keine Einträge.";
+        protokollartBlock.appendChild(emptySlot);
+      } else {
+        slotProtocols.forEach((protocol) => {
+          const card = document.createElement("div");
+          card.className = "saved-protocol-card";
+          card.tabIndex = 0;
+          card.setAttribute("role", "button");
+          card.setAttribute(
+            "aria-label",
+            `Protokoll ${protocol.vorgangsnummer || "ohne Nummer"} öffnen`
+          );
+
+          const open = (): void => {
+            openSavedProtocol(protocol.id);
+          };
+          card.addEventListener("click", (event) => {
+            if (event.target instanceof HTMLElement && event.target.closest("button")) {
+              return;
+            }
+            open();
+          });
+          card.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              open();
+            }
+          });
+
+          // Vorgangsnummer ohne Jahreszahl (bereits vierstellig vom Server).
+          const nummer = protocol.vorgangsnummer.trim() || "—";
+          const line1 = document.createElement("p");
+          line1.className = "saved-protocol-line is-primary";
+          line1.textContent = `${nummer} · ${formatProtocolDateDe(protocol.datum)}`;
+          card.appendChild(line1);
+
+          const line2 = document.createElement("p");
+          line2.className = "saved-protocol-line";
+          line2.textContent = protocol.adresse.trim() || "—";
+          card.appendChild(line2);
+
+          const line3 = document.createElement("p");
+          line3.className = "saved-protocol-line";
+          line3.textContent = protocol.mietername.trim() || "—";
+          card.appendChild(line3);
+
+          const sync = document.createElement("p");
+          sync.className = `saved-protocol-sync ${protocol.serverFullySynced ? "is-ok" : "is-pending"}`;
+          sync.textContent = protocol.serverFullySynced
+            ? "Server vollständig synchronisiert"
+            : "Noch nicht vollständig synchronisiert";
+          card.appendChild(sync);
+
+          const actions = document.createElement("div");
+          actions.className = "saved-protocol-card-actions";
+
+          const openButton = document.createElement("button");
+          openButton.type = "button";
+          openButton.className = "main-btn";
+          openButton.textContent = "Öffnen";
+          openButton.addEventListener("click", (event) => {
+            event.stopPropagation();
+            open();
+          });
+          actions.appendChild(openButton);
+
+          if (protocol.serverFullySynced) {
+            const deleteButton = document.createElement("button");
+            deleteButton.type = "button";
+            deleteButton.className = "main-btn btn-delete-draft";
+            deleteButton.textContent = "Lokal löschen";
+            deleteButton.addEventListener("click", (event) => {
+              event.stopPropagation();
+              if (window.confirm("Dieses vollständig synchronisierte Protokoll lokal löschen?")) {
+                deleteSavedProtocol(protocol.id);
+              }
+            });
+            actions.appendChild(deleteButton);
+          }
+
+          card.appendChild(actions);
+          protokollartBlock.appendChild(card);
+        });
+      }
+
+      objektartBlock.appendChild(protokollartBlock);
+    });
+
+    gespeicherteProtokolleList.appendChild(objektartBlock);
+  });
+}
+
+function goToGespeicherteProtokolleView(): void {
+  setAppSubtitle(DEFAULT_SUBTITLE, false);
+  renderSavedProtocolsList();
+  showOnly(viewGespeicherteProtokolle);
+}
+
 // --- Zählerstände: Datenmodell -------------------------------------------
 // Reines, serialisierbares Datenmodell (keine DOM-Referenzen), damit es
 // später unverändert in IndexedDB gespeichert und mit der Cloud
@@ -1516,6 +1850,7 @@ function requireElement<T extends HTMLElement>(id: string): T {
 const viewObjektart = requireElement<HTMLDivElement>("view-objektart");
 const viewProtokollart = requireElement<HTMLDivElement>("view-protokollart");
 const viewEntwuerfe = requireElement<HTMLDivElement>("view-entwuerfe");
+const viewGespeicherteProtokolle = requireElement<HTMLDivElement>("view-gespeicherte-protokolle");
 const viewFormular = requireElement<HTMLDivElement>("view-formular");
 const formStandard = requireElement<HTMLDivElement>("form-standard");
 const formSchluessel = requireElement<HTMLDivElement>("form-schluessel");
@@ -1542,16 +1877,29 @@ const signatureContainer = requireElement<HTMLDivElement>("signature-container")
 const schluesselSignatureContainer = requireElement<HTMLDivElement>("signature-container-schluessel");
 const entwuerfeList = requireElement<HTMLDivElement>("entwuerfe-list");
 const entwuerfeEmpty = requireElement<HTMLParagraphElement>("entwuerfe-empty");
+const gespeicherteProtokolleList = requireElement<HTMLDivElement>("gespeicherte-protokolle-list");
+const gespeicherteProtokolleEmpty = requireElement<HTMLParagraphElement>("gespeicherte-protokolle-empty");
+const gespeicherteProtokolleWarning = requireElement<HTMLParagraphElement>("gespeicherte-protokolle-warning");
 const draftStatus = requireElement<HTMLParagraphElement>("draft-status");
 const btnMeineEntwuerfe = requireElement<HTMLButtonElement>("btn-meine-entwuerfe");
 const btnZurueckEntwuerfe = requireElement<HTMLButtonElement>("btn-zurueck-entwuerfe");
+const btnGespeicherteProtokolle = requireElement<HTMLButtonElement>("btn-gespeicherte-protokolle");
+const btnZurueckGespeicherteProtokolle = requireElement<HTMLButtonElement>(
+  "btn-zurueck-gespeicherte-protokolle"
+);
 const btnEntwurfSpeichern = requireElement<HTMLButtonElement>("btn-entwurf-speichern");
 const btnZurueck = requireElement<HTMLButtonElement>("btn-zurueck");
 const btnZurueckFormular = requireElement<HTMLButtonElement>("btn-zurueck-formular");
 const btnNeustart = requireElement<HTMLButtonElement>("btn-neustart");
 
 function showOnly(view: HTMLElement): void {
-  for (const v of [viewObjektart, viewProtokollart, viewEntwuerfe, viewFormular]) {
+  for (const v of [
+    viewObjektart,
+    viewProtokollart,
+    viewEntwuerfe,
+    viewGespeicherteProtokolle,
+    viewFormular,
+  ]) {
     v.classList.toggle("hidden", v !== view);
   }
 }
@@ -3126,59 +3474,6 @@ function buildSchluesselPdfInput(protokollart: Protokollart, form: FormDraft): S
   };
 }
 
-function buildCompletionDraftName(form: FormDraft, protokollart: Protokollart): string {
-  const mieter = form.kopfdaten.mietername.trim();
-  const adresse = getGebaeudeLabel(form.kopfdaten.gebaeudeAuswahl).trim();
-  const kind = PROTOKOLLART_LABELS[protokollart];
-  const parts = [mieter, adresse, kind].filter(Boolean);
-  return parts.length > 0 ? parts.join(" – ") : `Protokoll ${kind}`;
-}
-
-/**
- * Ensure the completed protocol stays in „Meine Entwürfe“ for resend/reupload.
- * Does not remove session data or media.
- */
-function upsertCompletionNamedDraft(
-  context: { objektart: Objektart; protokollart: Protokollart },
-  form: FormDraft
-): void {
-  const drafts = loadNamedDrafts();
-  const name = buildCompletionDraftName(form, context.protokollart);
-  const now = new Date().toISOString();
-  const formCopy = JSON.parse(JSON.stringify(form)) as FormDraft;
-
-  const existingIndex = drafts.findIndex(
-    (item) =>
-      item.objektart === context.objektart &&
-      item.protokollart === context.protokollart &&
-      item.name === name
-  );
-
-  if (existingIndex >= 0) {
-    drafts[existingIndex] = {
-      ...drafts[existingIndex],
-      name,
-      updatedAt: now,
-      form: formCopy,
-      // vorgangId bleibt unverändert — dieser Eintrag existierte schon vorher
-      // (z.B. über "Als Entwurf speichern") und behält seine Medien-Zuordnung.
-    };
-  } else {
-    drafts.unshift({
-      id: generateId("named-draft"),
-      name,
-      createdAt: now,
-      updatedAt: now,
-      objektart: context.objektart,
-      protokollart: context.protokollart,
-      form: formCopy,
-      vorgangId: getOrCreateVorgangId(context.objektart, context.protokollart),
-    });
-  }
-
-  saveNamedDrafts(drafts.slice(0, MAX_NAMED_DRAFTS));
-}
-
 function completionKindLabel(protokollart: Protokollart): string {
   return protokollart === "uebergabe" ? "Übergabe" : "Rücknahme";
 }
@@ -3502,8 +3797,7 @@ async function finishProtocolAsPdf(): Promise<void> {
     }
   }
 
-  // Keep / refresh entry in „Meine Entwürfe“ — do not clear on abschließen.
-  upsertCompletionNamedDraft(context, form);
+  // Abschluss speichert lokal unter „Gespeicherte Protokolle“ (nicht in Entwürfe).
   syncCurrentFormToSessionDraft();
 
   const finishButton = signatureContainer.querySelector(
@@ -3671,6 +3965,16 @@ async function finishProtocolAsPdf(): Promise<void> {
     );
   }
 
+  // Lokales Archiv „Gespeicherte Protokolle“ — unabhängig von Vercel Blob/FTPS.
+  upsertSavedProtocol({
+    objektart: context.objektart,
+    protokollart: context.protokollart,
+    form,
+    vorgangId: sessionKey,
+    vorgangsnummer,
+    serverFullySynced: Boolean(archiveResult?.ok && mieterPdfOk),
+  });
+
   // Only after all transfers finished: final message + email section (no form body).
   // Die E-Mail an den Mieter (weiter unten in renderMieterEmailSection) nutzt
   // weiterhin ausschließlich completionMieterPdf (Text, ohne Fotos/Videos) —
@@ -3809,9 +4113,7 @@ async function finishSchluesselAsPdf(): Promise<void> {
     return;
   }
 
-  // Keep / refresh entry in „Meine Entwürfe“ — do not clear on abschließen
-  // (gleiches Verhalten wie beim Standard-Formular, siehe finishProtocolAsPdf).
-  upsertCompletionNamedDraft(context, form);
+  // Abschluss speichert lokal unter „Gespeicherte Protokolle“ (nicht in Entwürfe).
   syncCurrentFormToSessionDraft();
 
   const finishButton = schluesselSignatureContainer.querySelector(
@@ -3908,6 +4210,16 @@ async function finishSchluesselAsPdf(): Promise<void> {
       "[finishSchluesselAsPdf] Skipping uploadProtocolArchive entirely — mieterPdfOk is false (see PDF generation error above)."
     );
   }
+
+  // Lokales Archiv „Gespeicherte Protokolle“ — unabhängig von Vercel Blob/FTPS.
+  upsertSavedProtocol({
+    objektart: context.objektart,
+    protokollart: context.protokollart,
+    form,
+    vorgangId: sessionKey,
+    vorgangsnummer,
+    serverFullySynced: Boolean(archiveResult?.ok && mieterPdfOk),
+  });
 
   // Only after all transfers finished: final message + email section (no form body).
   renderCompletionTop(formSchluessel, context.protokollart, archiveResult, mieterPdfOk, vorgangsnummer);
@@ -4517,6 +4829,14 @@ function initEventListeners(): void {
   });
 
   btnZurueckEntwuerfe.addEventListener("click", () => {
+    goBackToObjektartView();
+  });
+
+  btnGespeicherteProtokolle.addEventListener("click", () => {
+    goToGespeicherteProtokolleView();
+  });
+
+  btnZurueckGespeicherteProtokolle.addEventListener("click", () => {
     goBackToObjektartView();
   });
 
