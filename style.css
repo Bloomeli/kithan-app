@@ -316,8 +316,8 @@ body {
     margin-right: 1.5rem;
 }
 
-#schluessel-media {
-    margin: 8px 0 16px;
+.schluessel-entry-media {
+    margin: 8px 0 12px;
 }
 
 /* Zähler: Titel + Foto/Video in einer Zeile (wie bei Räumen). */

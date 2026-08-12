@@ -60,6 +60,7 @@ export interface ProtocolPdfInput {
 export interface SchluesselPdfEntry {
   anzahl: string;
   schluesselnummer: string;
+  ownerKey?: string;
 }
 
 export interface SchluesselPdfInput {
@@ -771,35 +772,42 @@ export async function generateCompanySchluesselPdf(
   if (input.entries.length === 0) {
     writer.addWrapped("Keine Schlüsselangaben erfasst.");
   } else {
-    input.entries.forEach((entry, index) => {
+    for (let index = 0; index < input.entries.length; index += 1) {
+      const entry = input.entries[index];
       writer.addSubsection(`Schlüssel ${index + 1}`);
       writer.addLine("Anzahl der Schlüssel", entry.anzahl);
       writer.addLine("Schlüsselnummer", entry.schluesselnummer);
+      const ownerKey = (entry.ownerKey || "").trim();
+      const label = `Schlüssel ${String(index + 1).padStart(2, "0")}`;
+      const eligible = ownerKey
+        ? photos.filter((photo) =>
+            photoBelongsToSection(
+              {
+                sessionKey: photo.protocolId,
+                protocolId: photo.protocolId,
+                ownerKey: photo.ownerKey,
+                room: photo.room,
+              },
+              currentProtocolId,
+              ownerKey,
+              label
+            )
+          )
+        : [];
+      for (let i = 0; i < eligible.length; i += 1) {
+        const photo = eligible[i];
+        const caption = `${label} ${String(i + 1).padStart(2, "0")}`;
+        try {
+          await addSinglePhotoToPdf(writer, photo.blob, caption);
+        } catch (error) {
+          console.error(
+            `[generateProtocolPdf] Schlüssel-PDF: Foto konnte nicht eingebettet werden (${caption}):`,
+            error
+          );
+          throw new CompanyPhotoEmbedError(caption);
+        }
+      }
       writer.addBlank(2);
-    });
-  }
-
-  const eligible = photos.filter((photo) =>
-    photoBelongsToSection(
-      {
-        sessionKey: photo.protocolId,
-        protocolId: photo.protocolId,
-        ownerKey: photo.ownerKey,
-        room: photo.room,
-      },
-      currentProtocolId,
-      "schluessel",
-      "Schlüssel"
-    )
-  );
-  for (let i = 0; i < eligible.length; i += 1) {
-    const photo = eligible[i];
-    const caption = `Schlüssel ${String(i + 1).padStart(2, "0")}`;
-    try {
-      await addSinglePhotoToPdf(writer, photo.blob, caption);
-    } catch (error) {
-      console.error(`[generateProtocolPdf] Schlüssel-PDF: Foto konnte nicht eingebettet werden (${caption}):`, error);
-      throw new CompanyPhotoEmbedError(caption);
     }
   }
 
