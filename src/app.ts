@@ -21,6 +21,12 @@ import { uploadProtocolArchive, type ProtocolArchiveUploadResult } from "./proto
 import { extensionFor } from "./blobFtpsUpload";
 import { acquireUploadWakeLock, releaseUploadWakeLock } from "./wakeLock";
 import { requestVorgangsnummer } from "./vorgangsnummer";
+import {
+  deleteSavedProtocolPdf,
+  loadSavedProtocolPdf,
+  openSavedProtocolPdfInViewer,
+  saveSavedProtocolPdf,
+} from "./savedProtocolPdfStore";
 
 type Objektart = "schluessel" | "gewerbe" | "privat" | "garage";
 type Protokollart = "uebergabe" | "ruecknahme";
@@ -841,6 +847,12 @@ interface NamedProtocolDraft {
    * unveränderten Mechanismus (getMediaSessionKey) läuft.
    */
   vorgangId: string;
+  /**
+   * true, wenn der Abschluss scheiterte, weil die Firmen-PDF inkl. Fotos
+   * nicht erzeugt oder lokal gespeichert werden konnte. Bleibt unter
+   * „Entwürfe“ (nicht unter „Gespeicherte Protokolle“).
+   */
+  pdfCreationFailed?: boolean;
 }
 
 /** Entwürfe von vor Einführung der eigenen Vorgangs-ID (Schritt 9) haben noch kein vorgangId-Feld. */
@@ -941,6 +953,10 @@ interface SavedProtocol {
   vorgangId: string;
   /** true nur wenn Firmenserver-Übertragung eindeutig vollständig erfolgreich war. */
   serverFullySynced: boolean;
+  /** Dateiname der lokal in IndexedDB abgelegten Firmen-PDF (Bytes liegen nicht in localStorage). */
+  companyPdfFilename?: string;
+  /** true, wenn die fertige Firmen-PDF lokal unter der Vorgangs-ID gespeichert wurde. */
+  hasCompanyPdf?: boolean;
 }
 
 const SAVED_PROTOCOL_OBJEKTART_ORDER: Objektart[] = ["privat", "gewerbe", "garage", "schluessel"];
@@ -1017,6 +1033,8 @@ function upsertSavedProtocol(input: {
   vorgangId: string;
   vorgangsnummer: string | null;
   serverFullySynced: boolean;
+  companyPdfFilename?: string | null;
+  hasCompanyPdf?: boolean;
 }): void {
   const protocols = loadSavedProtocols();
   const now = new Date().toISOString();
@@ -1026,8 +1044,24 @@ function upsertSavedProtocol(input: {
 
   const existingIndex = protocols.findIndex((item) => item.vorgangId === input.vorgangId && input.vorgangId !== "");
 
+  const mergePdfMeta = (
+    existing: SavedProtocol | null
+  ): Pick<SavedProtocol, "companyPdfFilename" | "hasCompanyPdf"> => {
+    if (input.hasCompanyPdf === true && input.companyPdfFilename) {
+      return {
+        companyPdfFilename: input.companyPdfFilename,
+        hasCompanyPdf: true,
+      };
+    }
+    return {
+      companyPdfFilename: existing?.companyPdfFilename,
+      hasCompanyPdf: existing?.hasCompanyPdf === true,
+    };
+  };
+
   if (existingIndex >= 0) {
     const existing = protocols[existingIndex];
+    const pdfMeta = mergePdfMeta(existing);
     // Niemals einen bereits bestätigten Sync-Status wieder auf „nicht synchronisiert“ zurücksetzen.
     if (existing.serverFullySynced && !input.serverFullySynced) {
       protocols[existingIndex] = {
@@ -1039,6 +1073,7 @@ function upsertSavedProtocol(input: {
         adresse: meta.adresse || existing.adresse,
         mietername: meta.mietername || existing.mietername,
         serverFullySynced: true,
+        ...pdfMeta,
       };
     } else {
       protocols[existingIndex] = {
@@ -1050,9 +1085,11 @@ function upsertSavedProtocol(input: {
         adresse: meta.adresse || existing.adresse,
         mietername: meta.mietername || existing.mietername,
         serverFullySynced: existing.serverFullySynced || input.serverFullySynced,
+        ...pdfMeta,
       };
     }
   } else {
+    const pdfMeta = mergePdfMeta(null);
     protocols.unshift({
       id: generateId("saved-protocol"),
       createdAt: now,
@@ -1066,10 +1103,109 @@ function upsertSavedProtocol(input: {
       form: formCopy,
       vorgangId: input.vorgangId || generateId("vorgang"),
       serverFullySynced: input.serverFullySynced,
+      ...pdfMeta,
     });
   }
 
   saveSavedProtocols(protocols);
+}
+
+async function persistFinishedProtocolPdfLocally(
+  vorgangId: string,
+  pdf: { filename: string; base64: string } | null,
+  context: { objektart: Objektart; protokollart: Protokollart },
+  form: FormDraft,
+  vorgangsnummer: string | null,
+  serverFullySynced: boolean
+): Promise<boolean> {
+  // „Gespeicherte Protokolle“ nur mit erfolgreich lokal abgelegter Firmen-PDF.
+  if (!pdf?.base64) {
+    return false;
+  }
+  try {
+    await saveSavedProtocolPdf(vorgangId, pdf.filename, pdf.base64);
+  } catch (error) {
+    console.error(
+      "[persistFinishedProtocolPdfLocally] Firmen-PDF konnte lokal nicht in IndexedDB gespeichert werden:",
+      error
+    );
+    return false;
+  }
+  upsertSavedProtocol({
+    objektart: context.objektart,
+    protokollart: context.protokollart,
+    form,
+    vorgangId,
+    vorgangsnummer,
+    serverFullySynced,
+    companyPdfFilename: pdf.filename,
+    hasCompanyPdf: true,
+  });
+  return true;
+}
+
+/** Entfernt einen Gespeichert-Eintrag ohne Firmen-PDF (z.B. nach pdf-failed). */
+function removeSavedProtocolWithoutCompanyPdf(vorgangId: string): void {
+  if (!vorgangId) {
+    return;
+  }
+  const remaining = loadSavedProtocols().filter(
+    (protocol) => protocol.vorgangId !== vorgangId || protocol.hasCompanyPdf === true
+  );
+  saveSavedProtocols(remaining);
+}
+
+/**
+ * Hält Formulardaten/Unterschriften unter „Entwürfe“ und markiert den
+ * Vorgang nach fehlgeschlagener Firmen-PDF-Erstellung/-Speicherung.
+ */
+function upsertNamedDraftAfterPdfFailure(
+  context: { objektart: Objektart; protokollart: Protokollart },
+  form: FormDraft,
+  vorgangId: string
+): void {
+  const drafts = loadNamedDrafts();
+  const now = new Date().toISOString();
+  const formCopy = JSON.parse(JSON.stringify(form)) as FormDraft;
+  const existing = drafts.find((draft) => draft.vorgangId === vorgangId && vorgangId !== "");
+  if (existing) {
+    existing.form = formCopy;
+    existing.updatedAt = now;
+    existing.pdfCreationFailed = true;
+    saveNamedDrafts(drafts);
+    return;
+  }
+  const titleDraft: NamedProtocolDraft = {
+    id: generateId("named-draft"),
+    name: "",
+    createdAt: now,
+    updatedAt: now,
+    objektart: context.objektart,
+    protokollart: context.protokollart,
+    form: formCopy,
+    vorgangId,
+    pdfCreationFailed: true,
+  };
+  titleDraft.name = getNamedDraftDisplayTitle(titleDraft);
+  drafts.unshift(titleDraft);
+  saveNamedDrafts(drafts);
+}
+
+function clearNamedDraftPdfFailureFlag(vorgangId: string): void {
+  if (!vorgangId) {
+    return;
+  }
+  const drafts = loadNamedDrafts();
+  let changed = false;
+  drafts.forEach((draft) => {
+    if (draft.vorgangId === vorgangId && draft.pdfCreationFailed) {
+      draft.pdfCreationFailed = false;
+      changed = true;
+    }
+  });
+  if (changed) {
+    saveNamedDrafts(drafts);
+  }
 }
 
 function deleteSavedProtocol(protocolId: string): void {
@@ -1085,6 +1221,7 @@ function deleteSavedProtocol(protocolId: string): void {
     );
     return;
   }
+  void deleteSavedProtocolPdf(target.vorgangId);
   saveSavedProtocols(protocols.filter((item) => item.id !== protocolId));
   renderSavedProtocolsList();
 }
@@ -1416,6 +1553,13 @@ function renderNamedDraftsList(): void {
     meta.textContent = `${OBJEKTART_LABELS[draft.objektart]} · ${PROTOKOLLART_LABELS[draft.protokollart]} · ${formatDraftTimestamp(draft.updatedAt)}`;
     card.appendChild(meta);
 
+    if (draft.pdfCreationFailed) {
+      const pdfHint = document.createElement("p");
+      pdfHint.className = "draft-card-meta draft-card-pdf-failed";
+      pdfHint.textContent = "PDF-Erstellung fehlgeschlagen – erneut abschließen";
+      card.appendChild(pdfHint);
+    }
+
     const actions = document.createElement("div");
     actions.className = "draft-card-actions";
 
@@ -1450,7 +1594,10 @@ function goToEntwuerfeView(): void {
 
 function renderSavedProtocolsList(): void {
   gespeicherteProtokolleList.innerHTML = "";
-  const protocols = loadSavedProtocols();
+  // Wohnungsprotokolle nur mit lokal gespeicherter Firmen-PDF; Schlüssel unverändert.
+  const protocols = loadSavedProtocols().filter(
+    (protocol) => protocol.objektart === "schluessel" || protocol.hasCompanyPdf === true
+  );
 
   if (protocols.length >= SAVED_PROTOCOLS_WARN_COUNT) {
     gespeicherteProtokolleWarning.textContent =
@@ -1558,12 +1705,31 @@ function renderSavedProtocolsList(): void {
           const openButton = document.createElement("button");
           openButton.type = "button";
           openButton.className = "main-btn";
-          openButton.textContent = "Öffnen";
+          openButton.textContent = "Formular öffnen";
           openButton.addEventListener("click", (event) => {
             event.stopPropagation();
             open();
           });
           actions.appendChild(openButton);
+
+          if (protocol.hasCompanyPdf) {
+            const pdfButton = document.createElement("button");
+            pdfButton.type = "button";
+            pdfButton.className = "main-btn";
+            pdfButton.textContent = "PDF öffnen";
+            pdfButton.addEventListener("click", (event) => {
+              event.stopPropagation();
+              void (async () => {
+                const ok = await openSavedProtocolPdfInViewer(protocol.vorgangId);
+                if (!ok) {
+                  window.alert(
+                    "Für dieses Protokoll ist lokal keine Firmen-PDF gespeichert. Bitte das Formular öffnen und erneut abschließen."
+                  );
+                }
+              })();
+            });
+            actions.appendChild(pdfButton);
+          }
 
           if (protocol.serverFullySynced) {
             const deleteButton = document.createElement("button");
@@ -3636,7 +3802,7 @@ function renderCompletionTop(
     );
     banner.classList.add("is-transfer-warning");
     banner.textContent =
-      "⚠ Das Protokoll-PDF konnte nicht erstellt werden. Die Daten wurden lokal gespeichert; bitte erneut versuchen.";
+      "PDF-Erstellung fehlgeschlagen – erneut abschließen. Der Vorgang bleibt unter „Entwürfe“ erhalten (Formular, Medien und Unterschriften).";
   } else {
     console.error(
       `[renderCompletionTop] interrupted archive upload — photoUploaded=${archiveResult?.photoUploaded} photoFailed=${archiveResult?.photoFailed} videoUploaded=${archiveResult?.videoUploaded} videoFailed=${archiveResult?.videoFailed} pdfUploaded=${archiveResult?.pdfUploaded}.`
@@ -3647,13 +3813,15 @@ function renderCompletionTop(
   }
   top.appendChild(banner);
 
-  const statusLine = document.createElement("p");
-  statusLine.className = `saved-protocol-sync ${resolvedKind === "success" ? "is-ok" : "is-pending"}`;
-  statusLine.textContent =
-    resolvedKind === "success"
-      ? "Server vollständig synchronisiert"
-      : "Abgeschlossen – noch nicht synchronisiert";
-  top.appendChild(statusLine);
+  if (resolvedKind !== "pdf-failed") {
+    const statusLine = document.createElement("p");
+    statusLine.className = `saved-protocol-sync ${resolvedKind === "success" ? "is-ok" : "is-pending"}`;
+    statusLine.textContent =
+      resolvedKind === "success"
+        ? "Server vollständig synchronisiert"
+        : "Abgeschlossen – noch nicht synchronisiert";
+    top.appendChild(statusLine);
+  }
 
   if (vorgangsnummer) {
     const vorgangsnummerLine = document.createElement("p");
@@ -3662,8 +3830,12 @@ function renderCompletionTop(
     top.appendChild(vorgangsnummerLine);
   }
 
-  renderMieterEmailSection(top, mieterPdfOk);
-  setProtocolFormBodyHidden(container, true);
+  if (resolvedKind !== "pdf-failed") {
+    renderMieterEmailSection(top, mieterPdfOk);
+    setProtocolFormBodyHidden(container, true);
+  } else {
+    setProtocolFormBodyHidden(container, false);
+  }
   top.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -3672,7 +3844,15 @@ function isDeviceOnline(): boolean {
 }
 
 function listUnsyncedSavedProtocols(): SavedProtocol[] {
-  return loadSavedProtocols().filter((protocol) => !protocol.serverFullySynced);
+  return loadSavedProtocols().filter((protocol) => {
+    if (protocol.serverFullySynced) {
+      return false;
+    }
+    if (protocol.objektart === "schluessel") {
+      return true;
+    }
+    return protocol.hasCompanyPdf === true;
+  });
 }
 
 function refreshUnsyncedProtocolsStartupBanner(): void {
@@ -3765,37 +3945,39 @@ async function syncOneSavedProtocol(protocol: SavedProtocol): Promise<boolean> {
   let pdfFilename: string;
   let pdfBase64: string;
   try {
-    if (protocol.objektart === "schluessel") {
+    // Bevorzugt die bereits lokal gespeicherte fertige Firmen-PDF — kein
+    // erneutes Erzeugen/Einbetten, sofern vorhanden.
+    const storedPdf = await loadSavedProtocolPdf(protocol.vorgangId);
+    if (storedPdf?.base64) {
+      pdfFilename = storedPdf.filename;
+      pdfBase64 = storedPdf.base64;
+    } else if (protocol.objektart === "schluessel") {
       const pdf = generateAndDownloadSchluesselPdf(
         buildSchluesselPdfInput(protocol.protokollart, protocol.form)
       );
       pdfFilename = pdf.filename;
       pdfBase64 = pdf.base64;
+      await saveSavedProtocolPdf(protocol.vorgangId, pdfFilename, pdfBase64);
     } else {
       const pdfInput = buildProtocolPdfInput(protocol.objektart, protocol.protokollart, protocol.form);
-      let archivePdf = generateAndDownloadProtocolPdf(pdfInput);
-      try {
-        const naming = await computeVorgangMediaNaming(
-          protocol.vorgangId,
-          protocol.objektart,
-          protocol.form
-        );
-        const company = await generateCompanyProtocolPdf(
-          pdfInput,
-          groupPhotosByRoomForCompanyPdf(naming)
-        );
-        archivePdf = company;
-      } catch (error) {
-        console.warn(
-          "[syncOneSavedProtocol] Firmen-PDF fehlgeschlagen — Fallback auf textliches Protokoll-PDF",
-          error
-        );
-      }
-      pdfFilename = archivePdf.filename;
-      pdfBase64 = archivePdf.base64;
+      // Nur die vollständige Firmen-PDF (inkl. Fotos) darf als Archiv hochgeladen
+      // werden — kein textliches Mieter-PDF als Ersatz.
+      generateAndDownloadProtocolPdf(pdfInput);
+      const naming = await computeVorgangMediaNaming(
+        protocol.vorgangId,
+        protocol.objektart,
+        protocol.form
+      );
+      const company = await generateCompanyProtocolPdf(
+        pdfInput,
+        groupPhotosByRoomForCompanyPdf(naming)
+      );
+      pdfFilename = company.filename;
+      pdfBase64 = company.base64;
+      await saveSavedProtocolPdf(protocol.vorgangId, pdfFilename, pdfBase64);
     }
   } catch (error) {
-    console.error("[syncOneSavedProtocol] Protokoll-PDF konnte nicht erzeugt werden", error);
+    console.error("[syncOneSavedProtocol] Protokoll-PDF konnte nicht geladen/erzeugt werden", error);
     return false;
   }
 
@@ -3828,25 +4010,25 @@ async function syncOneSavedProtocol(protocol: SavedProtocol): Promise<boolean> {
       pdfBase64,
       pdfRemoteSubdir,
     });
-    upsertSavedProtocol({
-      objektart: protocol.objektart,
-      protokollart: protocol.protokollart,
-      form: protocol.form,
-      vorgangId: protocol.vorgangId,
+    await persistFinishedProtocolPdfLocally(
+      protocol.vorgangId,
+      { filename: pdfFilename, base64: pdfBase64 },
+      { objektart: protocol.objektart, protokollart: protocol.protokollart },
+      protocol.form,
       vorgangsnummer,
-      serverFullySynced: Boolean(result.ok),
-    });
+      Boolean(result.ok)
+    );
     return Boolean(result.ok);
   } catch (error) {
     console.error("[syncOneSavedProtocol] Upload fehlgeschlagen", error);
-    upsertSavedProtocol({
-      objektart: protocol.objektart,
-      protokollart: protocol.protokollart,
-      form: protocol.form,
-      vorgangId: protocol.vorgangId,
+    await persistFinishedProtocolPdfLocally(
+      protocol.vorgangId,
+      { filename: pdfFilename, base64: pdfBase64 },
+      { objektart: protocol.objektart, protokollart: protocol.protokollart },
+      protocol.form,
       vorgangsnummer,
-      serverFullySynced: false,
-    });
+      false
+    );
     return false;
   } finally {
     await releaseUploadWakeLock();
@@ -3995,7 +4177,8 @@ async function finishProtocolAsPdf(): Promise<void> {
     }
   }
 
-  // Abschluss speichert lokal unter „Gespeicherte Protokolle“ (nicht in Entwürfe).
+  // Abschluss: „Gespeicherte Protokolle“ erst nach erfolgreicher Firmen-PDF lokal.
+  // Bei pdf-failed bleibt der Vorgang unter „Entwürfe“.
   syncCurrentFormToSessionDraft();
 
   const finishButton = signatureContainer.querySelector(
@@ -4007,15 +4190,6 @@ async function finishProtocolAsPdf(): Promise<void> {
 
   hideDraftStatus();
   const sessionKey = getOrCreateVorgangId(context.objektart, context.protokollart);
-  // Sofort lokal als abgeschlossen (noch nicht synchronisiert) sichern — auch offline.
-  upsertSavedProtocol({
-    objektart: context.objektart,
-    protokollart: context.protokollart,
-    form,
-    vorgangId: sessionKey,
-    vorgangsnummer: null,
-    serverFullySynced: false,
-  });
   showTransferInProgressBanner(formStandard);
 
   let mieterPdfOk = false;
@@ -4067,11 +4241,9 @@ async function finishProtocolAsPdf(): Promise<void> {
   // Firmen-PDF (Schritt 6): textlich identisch zum Mieter-PDF, zusätzlich die
   // aufgenommenen Fotos gruppiert nach Raum (keine Videos — die bleiben
   // ausschließlich als separate Mediendatei auf dem Server). Diese Version
-  // geht NICHT per E-Mail an den Mieter, sondern ersetzt weiter unten nur
-  // das Mieter-PDF beim Server-Upload. Schlägt die Foto-Einbettung
-  // unerwartet komplett fehl (z.B. Speicherdruck bei sehr vielen Fotos),
-  // wird mit deutlicher Warnung auf das rein textliche Mieter-PDF für den
-  // Server-Upload zurückgefallen, statt den gesamten Abschluss zu blockieren.
+  // geht NICHT per E-Mail an den Mieter. Ohne erfolgreiche Firmen-PDF
+  // (inkl. Fotos) gibt es keinen Server-Upload und kein Text-PDF als Ersatz —
+  // Formular und Medien bleiben lokal erhalten.
   let completionCompanyPdf: { filename: string; base64: string } | null = null;
   if (mieterPdfOk && protocolPdfInput) {
     try {
@@ -4082,33 +4254,50 @@ async function finishProtocolAsPdf(): Promise<void> {
       );
     } catch (error) {
       console.error(
-        "[finishProtocolAsPdf] Firmen-PDF (mit Fotos) konnte nicht erstellt werden — Fallback auf das textliche Mieter-PDF für den Server-Upload:",
+        "[finishProtocolAsPdf] Firmen-PDF (mit Fotos) konnte nicht erstellt werden — kein Text-PDF-Fallback, kein Server-Upload:",
         error
       );
       completionCompanyPdf = null;
     }
   }
-  const archivePdf = completionCompanyPdf ?? completionMieterPdf;
+
+  // Reihenfolge zwingend: Firmen-PDF erzeugt → lokal speichern → erst dann Upload.
+  let localCompanyPdfSaved = false;
+  if (completionCompanyPdf) {
+    localCompanyPdfSaved = await persistFinishedProtocolPdfLocally(
+      sessionKey,
+      completionCompanyPdf,
+      context,
+      form,
+      null,
+      false
+    );
+    if (!localCompanyPdfSaved) {
+      console.error(
+        "[finishProtocolAsPdf] Firmen-PDF konnte lokal nicht gespeichert werden — Server-Upload wird übersprungen."
+      );
+    }
+  }
 
   let archiveResult: ProtocolArchiveUploadResult | null = null;
   let vorgangsnummer: string | null = null;
   let completionKind: "success" | "offline" | "interrupted" | "pdf-failed" = "interrupted";
+  let archivePdfFilename = completionCompanyPdf?.filename ?? "";
 
-  if (!mieterPdfOk || !archivePdf) {
+  if (!completionCompanyPdf || !localCompanyPdfSaved) {
     completionKind = "pdf-failed";
     console.warn(
-      "[finishProtocolAsPdf] Skipping uploadProtocolArchive entirely — mieterPdfOk is false (see PDF generation error above)."
+      "[finishProtocolAsPdf] Skipping uploadProtocolArchive — Firmen-PDF fehlt oder wurde lokal nicht gespeichert."
     );
+    // Formular, Medien und Unterschriften bleiben erhalten → Entwurf, nicht Archiv.
+    syncCurrentFormToSessionDraft();
+    upsertNamedDraftAfterPdfFailure(context, form, sessionKey);
+    removeSavedProtocolWithoutCompanyPdf(sessionKey);
+    if (finishButton) {
+      finishButton.disabled = false;
+    }
   } else if (!isDeviceOnline()) {
     completionKind = "offline";
-    upsertSavedProtocol({
-      objektart: context.objektart,
-      protokollart: context.protokollart,
-      form,
-      vorgangId: sessionKey,
-      vorgangsnummer: null,
-      serverFullySynced: false,
-    });
   } else {
     // Vorgangsnummer + Ordnerpfad VOR dem Upload anfordern, da der finale
     // PDF-Dateiname die Nummer bereits enthalten soll (z.B.
@@ -4120,7 +4309,7 @@ async function finishProtocolAsPdf(): Promise<void> {
     // übereinstimmen könnte. Schlägt schon die Nummern-Anfrage selbst fehl
     // (z.B. offline), wird ohne Nummer und im bisherigen, flachen Ordner
     // hochgeladen (kein Blockieren, kein Datenverlust).
-    let pdfFilename = archivePdf.filename;
+    let pdfFilename = completionCompanyPdf.filename;
     let pdfRemoteSubdir: string | undefined;
     const numberResult = await requestVorgangsnummer(sessionKey, context.objektart);
     if (numberResult.ok && numberResult.vorgangsnummer && numberResult.jahr) {
@@ -4139,6 +4328,7 @@ async function finishProtocolAsPdf(): Promise<void> {
         `[finishProtocolAsPdf] Vorgangsnummer konnte nicht vergeben werden (${numberResult.error}) — Upload läuft ohne Nummer im bisherigen Ordner weiter.`
       );
     }
+    archivePdfFilename = pdfFilename;
 
     // Verhindert, dass der Bildschirm während der (potenziell mehrminütigen,
     // nacheinander laufenden) Foto-/Video-/PDF-Übertragung automatisch sperrt.
@@ -4152,7 +4342,7 @@ async function finishProtocolAsPdf(): Promise<void> {
       archiveResult = await uploadProtocolArchive({
         sessionKey,
         pdfFilename,
-        pdfBase64: archivePdf.base64,
+        pdfBase64: completionCompanyPdf.base64,
         pdfRemoteSubdir,
       });
       console.log(
@@ -4168,15 +4358,18 @@ async function finishProtocolAsPdf(): Promise<void> {
     completionKind = archiveResult?.ok ? "success" : "interrupted";
   }
 
-  // Lokales Archiv „Gespeicherte Protokolle“ — unabhängig von Vercel Blob/FTPS.
-  upsertSavedProtocol({
-    objektart: context.objektart,
-    protokollart: context.protokollart,
-    form,
-    vorgangId: sessionKey,
-    vorgangsnummer,
-    serverFullySynced: completionKind === "success",
-  });
+  // Lokales Archiv: Sync-Status / Dateiname nach Upload aktualisieren (nur wenn Firmen-PDF lokal liegt).
+  if (completionCompanyPdf && localCompanyPdfSaved) {
+    await persistFinishedProtocolPdfLocally(
+      sessionKey,
+      { filename: archivePdfFilename || completionCompanyPdf.filename, base64: completionCompanyPdf.base64 },
+      context,
+      form,
+      vorgangsnummer,
+      completionKind === "success"
+    );
+    clearNamedDraftPdfFailureFlag(sessionKey);
+  }
   refreshUnsyncedProtocolsStartupBanner();
 
   // Only after all transfers finished: final message + email section (no form body).
@@ -4369,6 +4562,17 @@ async function finishSchluesselAsPdf(): Promise<void> {
   // gespeichert wurden (siehe getMediaSessionKey) — das Schlüssel-Formular
   // erfasst aktuell keine Fotos/Videos, uploadProtocolArchive lädt dann
   // schlicht 0 Fotos/0 Videos hoch und fährt direkt mit dem PDF fort.
+  if (completionMieterPdf) {
+    await persistFinishedProtocolPdfLocally(
+      sessionKey,
+      completionMieterPdf,
+      context,
+      form,
+      null,
+      false
+    );
+  }
+
   let archiveResult: ProtocolArchiveUploadResult | null = null;
   let vorgangsnummer: string | null = null;
   let completionKind: "success" | "offline" | "interrupted" | "pdf-failed" = "interrupted";
@@ -4380,14 +4584,7 @@ async function finishSchluesselAsPdf(): Promise<void> {
     );
   } else if (!isDeviceOnline()) {
     completionKind = "offline";
-    upsertSavedProtocol({
-      objektart: context.objektart,
-      protokollart: context.protokollart,
-      form,
-      vorgangId: sessionKey,
-      vorgangsnummer: null,
-      serverFullySynced: false,
-    });
+    await persistFinishedProtocolPdfLocally(sessionKey, completionMieterPdf, context, form, null, false);
   } else {
     let pdfFilename = completionMieterPdf.filename;
     let pdfRemoteSubdir: string | undefined;
@@ -4431,15 +4628,14 @@ async function finishSchluesselAsPdf(): Promise<void> {
     completionKind = archiveResult?.ok ? "success" : "interrupted";
   }
 
-  // Lokales Archiv „Gespeicherte Protokolle“ — unabhängig von Vercel Blob/FTPS.
-  upsertSavedProtocol({
-    objektart: context.objektart,
-    protokollart: context.protokollart,
+  await persistFinishedProtocolPdfLocally(
+    sessionKey,
+    completionMieterPdf,
+    context,
     form,
-    vorgangId: sessionKey,
     vorgangsnummer,
-    serverFullySynced: completionKind === "success",
-  });
+    completionKind === "success"
+  );
   refreshUnsyncedProtocolsStartupBanner();
 
   // Only after all transfers finished: final message + email section (no form body).

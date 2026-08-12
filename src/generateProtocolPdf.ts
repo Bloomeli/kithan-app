@@ -343,7 +343,12 @@ export interface ProtocolPdfCompanyRoom {
  * nirgends manuell um 90° gedreht.
  */
 async function loadPhotoCanvasAutoOriented(blob: Blob): Promise<HTMLCanvasElement> {
-  const url = URL.createObjectURL(blob);
+  // Safari/WebKit: IndexedDB-Blobs nach geschlossener Transaktion oft nicht
+  // mehr dekodierbar — Bytes zuerst ablösen (gleiche Idee wie loadMediaForUpload).
+  const mimeType = blob.type || "image/jpeg";
+  const buffer = await blob.arrayBuffer();
+  const safeBlob = new Blob([buffer.slice(0)], { type: mimeType });
+  const url = URL.createObjectURL(safeBlob);
   try {
     const image = await new Promise<HTMLImageElement>((resolve, reject) => {
       const el = new Image();
