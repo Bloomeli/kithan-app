@@ -37,10 +37,15 @@ export function photoBelongsToSection(
   sectionOwnerKey: string,
   sectionLabel: string
 ): boolean {
-  const photoProtocolId = (photo.protocolId || photo.sessionKey || "").trim();
-  if (!currentProtocolId || photoProtocolId !== currentProtocolId) {
+  const current = currentProtocolId.trim();
+  const photoProtocolId = (photo.protocolId || "").trim();
+  const photoSessionKey = (photo.sessionKey || "").trim();
+  // Neue Aufnahmen haben protocolId. Alte Datensätze ohne protocolId nur dann,
+  // wenn sessionKey exakt der aktuelle Vorgang ist — nie ein anderer Vorgang.
+  const boundId = photoProtocolId || photoSessionKey;
+  if (!current || !boundId || boundId !== current) {
     console.warn(
-      `[media-binding] Foto ignoriert — protocolId passt nicht (foto=${photoProtocolId || "(leer)"} aktuell=${currentProtocolId} ownerKey=${photo.ownerKey})`
+      `[media-binding] Foto ignoriert — protocolId passt nicht (foto=${boundId || "(leer)"} aktuell=${current} ownerKey=${photo.ownerKey})`
     );
     return false;
   }

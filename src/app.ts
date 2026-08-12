@@ -22,7 +22,7 @@ import { uploadProtocolArchive, type ProtocolArchiveUploadResult } from "./proto
 import { photoBelongsToSection } from "./mediaBinding";
 import { extensionFor } from "./blobFtpsUpload";
 import { acquireUploadWakeLock, releaseUploadWakeLock } from "./wakeLock";
-import { requestVorgangsnummer } from "./vorgangsnummer";
+import { getOrAllocateVorgangsnummer, jahrFromVorgangsnummer } from "./vorgangsnummer";
 import {
   deleteSavedProtocolPdf,
   loadSavedProtocolPdf,
@@ -527,6 +527,30 @@ function getOrCreateVorgangId(objektart: Objektart, protokollart: Protokollart):
   const vorgangId = hasExistingDraft ? legacyFormDraftKey : generateId("vorgang");
   localStorage.setItem(key, vorgangId);
   return vorgangId;
+}
+
+/**
+ * Ein abgeschlossener Vorgang (Firmen-PDF unter „Gespeicherte Protokolle“)
+ * darf den Slot nicht weiter belegen — sonst teilen der nächste neue Vorgang
+ * und der alte dieselbe vorgangId und damit dieselben IndexedDB-Fotos.
+ */
+function startFreshVorgangSlotIfCurrentIsFinished(
+  objektart: Objektart,
+  protokollart: Protokollart
+): void {
+  const key = vorgangIdKey(objektart, protokollart);
+  const existing = localStorage.getItem(key);
+  if (!existing) {
+    return;
+  }
+  const finished = loadSavedProtocols().some(
+    (protocol) => protocol.vorgangId === existing && protocol.hasCompanyPdf === true
+  );
+  if (!finished) {
+    return;
+  }
+  localStorage.setItem(key, generateId("vorgang"));
+  localStorage.removeItem(formDraftKey(objektart, protokollart));
 }
 
 function emptyKopfdaten(): KopfdatenDraft {
@@ -3569,7 +3593,7 @@ async function computeVorgangMediaNaming(
         photoBelongsToSection(
           {
             sessionKey: record.sessionKey,
-            protocolId: record.protocolId || record.sessionKey,
+            protocolId: record.protocolId,
             ownerKey: record.ownerKey,
             room: record.room || record.ownerLabel,
           },
@@ -3590,19 +3614,7 @@ async function computeVorgangMediaNaming(
     let photoCount = 0;
     let videoCount = 0;
     for (const record of eligible) {
-      const capturedSequence =
-        record.ownerSequence && record.ownerSequence > 0
-          ? record.ownerSequence
-          : record.kind === "photo"
-            ? (photoCount += 1)
-            : (videoCount += 1);
-      if (record.ownerSequence && record.ownerSequence > 0) {
-        if (record.kind === "photo") {
-          photoCount += 1;
-        } else {
-          videoCount += 1;
-        }
-      }
+      const capturedSequence = record.kind === "photo" ? (photoCount += 1) : (videoCount += 1);
       const kindLabel = record.kind === "photo" ? "Foto" : "Video";
       const ext = extensionFor(record.mimeType, record.kind);
       let blob = record.blob;
@@ -4157,25 +4169,25 @@ async function syncOneSavedProtocol(protocol: SavedProtocol): Promise<boolean> {
   }
 
   let vorgangsnummer = protocol.vorgangsnummer.trim() || null;
-  let pdfRemoteSubdir: string | undefined;
-  const numberResult = await requestVorgangsnummer(protocol.vorgangId, protocol.objektart);
-  if (numberResult.ok && numberResult.vorgangsnummer && numberResult.jahr) {
-    vorgangsnummer = numberResult.vorgangsnummer;
-    const mietername =
-      protocol.objektart === "schluessel"
-        ? protocol.form.schluessel?.mietername ?? ""
-        : protocol.form.kopfdaten.mietername;
-    const wohnung =
-      protocol.objektart === "schluessel"
-        ? protocol.form.schluessel?.wohnungsnummerLage ?? ""
-        : protocol.form.kopfdaten.wohnungsnummerLage;
-    pdfFilename = buildVorgangPdfFilename(vorgangsnummer, mietername, wohnung);
-    pdfRemoteSubdir = buildVorgangRemoteSubdir(
+  const mietername =
+    protocol.objektart === "schluessel"
+      ? protocol.form.schluessel?.mietername ?? ""
+      : protocol.form.kopfdaten.mietername;
+  const wohnung =
+    protocol.objektart === "schluessel"
+      ? protocol.form.schluessel?.wohnungsnummerLage ?? ""
+      : protocol.form.kopfdaten.wohnungsnummerLage;
+  if (!vorgangsnummer) {
+    const allocated = getOrAllocateVorgangsnummer(
+      protocol.vorgangId,
       protocol.objektart,
-      protocol.protokollart,
-      numberResult.jahr
+      protocol.protokollart
     );
+    vorgangsnummer = allocated.display;
   }
+  const jahr = jahrFromVorgangsnummer(vorgangsnummer);
+  pdfFilename = buildVorgangPdfFilename(vorgangsnummer, mietername, wohnung);
+  const pdfRemoteSubdir = buildVorgangRemoteSubdir(protocol.objektart, protocol.protokollart, jahr);
 
   await acquireUploadWakeLock();
   try {
@@ -4367,6 +4379,18 @@ async function finishProtocolAsPdf(): Promise<void> {
 
   hideDraftStatus();
   const sessionKey = getOrCreateVorgangId(context.objektart, context.protokollart);
+  const allocated = getOrAllocateVorgangsnummer(sessionKey, context.objektart, context.protokollart);
+  const vorgangsnummer = allocated.display;
+  const numberedPdfFilename = buildVorgangPdfFilename(
+    vorgangsnummer,
+    formSnapshot.kopfdaten.mietername,
+    formSnapshot.kopfdaten.wohnungsnummerLage
+  );
+  const pdfRemoteSubdir = buildVorgangRemoteSubdir(
+    context.objektart,
+    context.protokollart,
+    allocated.jahr
+  );
   showTransferInProgressBanner(formStandard);
 
   let mieterPdfOk = false;
@@ -4452,12 +4476,13 @@ async function finishProtocolAsPdf(): Promise<void> {
   // Reihenfolge zwingend: Firmen-PDF erzeugt → lokal speichern → erst dann Upload.
   let localCompanyPdfSaved = false;
   if (completionCompanyPdf) {
+    completionCompanyPdf = { filename: numberedPdfFilename, base64: completionCompanyPdf.base64 };
     localCompanyPdfSaved = await persistFinishedProtocolPdfLocally(
       sessionKey,
       completionCompanyPdf,
       context,
       formSnapshot,
-      null,
+      vorgangsnummer,
       false
     );
     if (!localCompanyPdfSaved) {
@@ -4470,9 +4495,8 @@ async function finishProtocolAsPdf(): Promise<void> {
   }
 
   let archiveResult: ProtocolArchiveUploadResult | null = null;
-  let vorgangsnummer: string | null = null;
   let completionKind: "success" | "offline" | "interrupted" | "pdf-failed" = "interrupted";
-  let archivePdfFilename = completionCompanyPdf?.filename ?? "";
+  let archivePdfFilename = completionCompanyPdf?.filename ?? numberedPdfFilename;
 
   if (!completionCompanyPdf || !localCompanyPdfSaved) {
     completionKind = "pdf-failed";
@@ -4494,36 +4518,11 @@ async function finishProtocolAsPdf(): Promise<void> {
   } else if (!isDeviceOnline()) {
     completionKind = "offline";
   } else {
-    // Vorgangsnummer + Ordnerpfad VOR dem Upload anfordern, da der finale
-    // PDF-Dateiname die Nummer bereits enthalten soll (z.B.
-    // "0027_Müller_WH07.pdf" in "2026/Privat/Übergabe/"). Anders als bei
-    // Fotos/Videos (die unverändert sofort bei der Aufnahme hochgeladen
-    // werden) ist das hier ein bewusster Kompromiss: schlägt der PDF-Upload
-    // danach doch fehl, wurde die Nummer trotzdem bereits verbraucht — das
-    // nehmen wir in Kauf, da der Dateiname sonst nicht mit der Nummer
-    // übereinstimmen könnte. Schlägt schon die Nummern-Anfrage selbst fehl
-    // (z.B. offline), wird ohne Nummer und im bisherigen, flachen Ordner
-    // hochgeladen (kein Blockieren, kein Datenverlust).
-    let pdfFilename = completionCompanyPdf.filename;
-    let pdfRemoteSubdir: string | undefined;
-    const numberResult = await requestVorgangsnummer(sessionKey, context.objektart);
-    if (numberResult.ok && numberResult.vorgangsnummer && numberResult.jahr) {
-      vorgangsnummer = numberResult.vorgangsnummer;
-      pdfFilename = buildVorgangPdfFilename(
-        vorgangsnummer,
-        formSnapshot.kopfdaten.mietername,
-        formSnapshot.kopfdaten.wohnungsnummerLage
-      );
-      pdfRemoteSubdir = buildVorgangRemoteSubdir(context.objektart, context.protokollart, numberResult.jahr);
-      console.log(
-        `[finishProtocolAsPdf] Vorgangsnummer vergeben: ${vorgangsnummer} -> ${pdfRemoteSubdir}/${pdfFilename}`
-      );
-    } else {
-      console.warn(
-        `[finishProtocolAsPdf] Vorgangsnummer konnte nicht vergeben werden (${numberResult.error}) — Upload läuft ohne Nummer im bisherigen Ordner weiter.`
-      );
-    }
+    const pdfFilename = numberedPdfFilename;
     archivePdfFilename = pdfFilename;
+    console.log(
+      `[finishProtocolAsPdf] Vorgangsnummer: ${vorgangsnummer} -> ${pdfRemoteSubdir}/${pdfFilename}`
+    );
 
     // Verhindert, dass der Bildschirm während der (potenziell mehrminütigen,
     // nacheinander laufenden) Foto-/Video-/PDF-Übertragung automatisch sperrt.
@@ -4726,6 +4725,18 @@ async function finishSchluesselAsPdf(): Promise<void> {
 
   hideDraftStatus();
   const sessionKey = getOrCreateVorgangId(context.objektart, context.protokollart);
+  const allocated = getOrAllocateVorgangsnummer(sessionKey, context.objektart, context.protokollart);
+  const vorgangsnummer = allocated.display;
+  const numberedPdfFilename = buildVorgangPdfFilename(
+    vorgangsnummer,
+    formSnapshot.schluessel?.mietername ?? "",
+    getGebaeudeLabel(formSnapshot.schluessel?.gebaeudeAuswahl ?? "")
+  );
+  const pdfRemoteSubdir = buildVorgangRemoteSubdir(
+    context.objektart,
+    context.protokollart,
+    allocated.jahr
+  );
   showTransferInProgressBanner(formSchluessel);
 
   let mieterPdfOk = false;
@@ -4752,12 +4763,13 @@ async function finishSchluesselAsPdf(): Promise<void> {
   // Reihenfolge wie bei Wohnungsprotokollen: PDF erzeugen → lokal speichern → Upload.
   let localArchivePdfSaved = false;
   if (completionMieterPdf) {
+    completionMieterPdf = { filename: numberedPdfFilename, base64: completionMieterPdf.base64 };
     localArchivePdfSaved = await persistFinishedProtocolPdfLocally(
       sessionKey,
       completionMieterPdf,
       context,
       formSnapshot,
-      null,
+      vorgangsnummer,
       false
     );
     if (!localArchivePdfSaved) {
@@ -4770,9 +4782,8 @@ async function finishSchluesselAsPdf(): Promise<void> {
   }
 
   let archiveResult: ProtocolArchiveUploadResult | null = null;
-  let vorgangsnummer: string | null = null;
   let completionKind: "success" | "offline" | "interrupted" | "pdf-failed" = "interrupted";
-  let archivePdfFilename = completionMieterPdf?.filename ?? "";
+  let archivePdfFilename = completionMieterPdf?.filename ?? numberedPdfFilename;
 
   if (!completionMieterPdf || !localArchivePdfSaved) {
     completionKind = "pdf-failed";
@@ -4791,26 +4802,11 @@ async function finishSchluesselAsPdf(): Promise<void> {
   } else if (!isDeviceOnline()) {
     completionKind = "offline";
   } else {
-    let pdfFilename = completionMieterPdf.filename;
-    let pdfRemoteSubdir: string | undefined;
-    const numberResult = await requestVorgangsnummer(sessionKey, context.objektart);
-    if (numberResult.ok && numberResult.vorgangsnummer && numberResult.jahr) {
-      vorgangsnummer = numberResult.vorgangsnummer;
-      pdfFilename = buildVorgangPdfFilename(
-        vorgangsnummer,
-        formSnapshot.schluessel?.mietername ?? "",
-        getGebaeudeLabel(formSnapshot.schluessel?.gebaeudeAuswahl ?? "")
-      );
-      pdfRemoteSubdir = buildVorgangRemoteSubdir(context.objektart, context.protokollart, numberResult.jahr);
-      console.log(
-        `[finishSchluesselAsPdf] Vorgangsnummer vergeben: ${vorgangsnummer} -> ${pdfRemoteSubdir}/${pdfFilename}`
-      );
-    } else {
-      console.warn(
-        `[finishSchluesselAsPdf] Vorgangsnummer konnte nicht vergeben werden (${numberResult.error}) — Upload läuft ohne Nummer im bisherigen Ordner weiter.`
-      );
-    }
+    const pdfFilename = numberedPdfFilename;
     archivePdfFilename = pdfFilename;
+    console.log(
+      `[finishSchluesselAsPdf] Vorgangsnummer: ${vorgangsnummer} -> ${pdfRemoteSubdir}/${pdfFilename}`
+    );
 
     await acquireUploadWakeLock();
     const uploadStartedAt = Date.now();
@@ -5372,6 +5368,9 @@ function goToFormularView(protokollart: Protokollart): void {
     return;
   }
   localStorage.setItem(STORAGE_KEYS.protokollart, protokollart);
+  startFreshVorgangSlotIfCurrentIsFinished(objektart, protokollart);
+  const vorgangId = getOrCreateVorgangId(objektart, protokollart);
+  getOrAllocateVorgangsnummer(vorgangId, objektart, protokollart);
   showFormular(objektart, protokollart);
 }
 

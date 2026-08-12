@@ -505,27 +505,23 @@ async function addBoundPhotosToPdf(
   sectionOwnerKey: string,
   sectionLabel: string
 ): Promise<void> {
-  const eligible = photos.filter((photo) => {
-    if (
-      !photoBelongsToSection(
-        {
-          sessionKey: photo.protocolId,
-          protocolId: photo.protocolId,
-          ownerKey: photo.ownerKey,
-          room: photo.room,
-        },
-        currentProtocolId,
-        sectionOwnerKey,
-        sectionLabel
-      )
-    ) {
-      return false;
-    }
-    return true;
-  });
-  for (const photo of eligible) {
+  const eligible = photos.filter((photo) =>
+    photoBelongsToSection(
+      {
+        sessionKey: photo.protocolId,
+        protocolId: photo.protocolId,
+        ownerKey: photo.ownerKey,
+        room: photo.room,
+      },
+      currentProtocolId,
+      sectionOwnerKey,
+      sectionLabel
+    )
+  );
+  for (let i = 0; i < eligible.length; i += 1) {
+    const photo = eligible[i];
     const captionRoom = (photo.room || sectionLabel).replace(/\//g, "-");
-    const caption = `${captionRoom}_${sequenceLetter(photo.sequence)}`;
+    const caption = `${captionRoom}_${sequenceLetter(i + 1)}`;
     try {
       await addSinglePhotoToPdf(writer, photo.blob, caption);
     } catch (error) {

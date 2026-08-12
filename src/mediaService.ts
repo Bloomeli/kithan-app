@@ -181,10 +181,12 @@ export async function captureAndStoreMedia(input: CaptureMediaInput): Promise<Ca
     if (room) {
       try {
         const existingForOwner = await getMediaForOwner(input.sessionKey, input.ownerKey);
-        const highestSequence = existingForOwner
-          .filter((existing) => existing.kind === processed.kind)
-          .reduce((max, existing) => Math.max(max, existing.ownerSequence ?? 0), 0);
-        ownerSequence = highestSequence + 1;
+        const sameKind = existingForOwner.filter((existing) => existing.kind === processed.kind);
+        const highestSequence = sameKind.reduce(
+          (max, existing) => Math.max(max, existing.ownerSequence ?? 0),
+          0
+        );
+        ownerSequence = Math.max(highestSequence, sameKind.length) + 1;
         const ext = extensionFor(processed.mimeType, processed.kind);
         const namePart = sanitizeOwnerLabelForFilename(room);
         friendlyFilename = `${namePart}_${sequenceLetter(ownerSequence)}${ext}`;
