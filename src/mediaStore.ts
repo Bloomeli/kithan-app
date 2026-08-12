@@ -51,6 +51,12 @@ export interface MediaRecord {
   ownerSequence?: number;
   /** Fertig berechneter, lesbarer Ziel-Dateiname (z.B. "Flur 01.jpg") — wird beim Server-Upload verwendet, falls gesetzt. */
   friendlyFilename?: string;
+  /** Technische Vorgangs-ID, identisch mit sessionKey — fest beim Aufnehmen gesetzt. */
+  protocolId?: string;
+  objektart?: string;
+  protokollart?: string;
+  /** Raum/Feld-Bezeichnung zum Aufnahmezeitpunkt, z.B. "Flur", "Stromzähler 01". */
+  room?: string;
 }
 
 /**
@@ -77,6 +83,10 @@ interface StoredMediaRecord {
   ownerLabel?: string;
   ownerSequence?: number;
   friendlyFilename?: string;
+  protocolId?: string;
+  objektart?: string;
+  protokollart?: string;
+  room?: string;
 }
 
 const DB_NAME = "kithan-media";
@@ -240,6 +250,10 @@ function uploadFieldsFromStored(stored: StoredMediaRecord): Pick<
   | "ownerLabel"
   | "ownerSequence"
   | "friendlyFilename"
+  | "protocolId"
+  | "objektart"
+  | "protokollart"
+  | "room"
 > {
   return {
     uploadStatus: stored.uploadStatus,
@@ -250,6 +264,10 @@ function uploadFieldsFromStored(stored: StoredMediaRecord): Pick<
     ownerLabel: stored.ownerLabel,
     ownerSequence: stored.ownerSequence,
     friendlyFilename: stored.friendlyFilename,
+    protocolId: stored.protocolId,
+    objektart: stored.objektart,
+    protokollart: stored.protokollart,
+    room: stored.room,
   };
 }
 
@@ -367,6 +385,10 @@ export async function saveMedia(
     ownerLabel: record.ownerLabel,
     ownerSequence: record.ownerSequence,
     friendlyFilename: record.friendlyFilename,
+    protocolId: record.protocolId,
+    objektart: record.objektart,
+    protokollart: record.protokollart,
+    room: record.room,
   };
 
   // Attempt 1: detached Blob + plain metadata only
@@ -612,6 +634,10 @@ export async function updateMediaUploadState(
     ownerLabel: existing.ownerLabel,
     ownerSequence: existing.ownerSequence,
     friendlyFilename: existing.friendlyFilename,
+    protocolId: existing.protocolId,
+    objektart: existing.objektart,
+    protokollart: existing.protokollart,
+    room: existing.room,
   };
 
   const blobRecord: StoredMediaRecord = {
@@ -653,6 +679,7 @@ export async function getMediaForOwner(sessionKey: string, ownerKey: string): Pr
     return rows
       .filter((row) => !String(row.id).startsWith(SELFTEST_ID_PREFIX))
       .map((row) => storedToMediaRecord(row))
+      .filter((record) => record.sessionKey === sessionKey && record.ownerKey === ownerKey)
       .sort((a, b) => a.createdAt - b.createdAt);
   } finally {
     db.close();
@@ -673,6 +700,7 @@ export async function getMediaForSession(sessionKey: string): Promise<MediaRecor
     return rows
       .filter((row) => !String(row.id).startsWith(SELFTEST_ID_PREFIX))
       .map((row) => storedToMediaRecord(row))
+      .filter((record) => record.sessionKey === sessionKey)
       .sort((a, b) => a.createdAt - b.createdAt);
   } finally {
     db.close();

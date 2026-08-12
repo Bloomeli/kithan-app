@@ -322,7 +322,8 @@ function bindMediaControls(
   videoButton: HTMLButtonElement,
   photoInput: HTMLInputElement,
   videoInput: HTMLInputElement,
-  getLabel?: () => string
+  getLabel?: () => string,
+  getBinding?: () => { objektart?: string; protokollart?: string } | null
 ): () => Promise<void> {
   const errorEl = document.createElement("p");
   errorEl.className = "media-capture-error hidden";
@@ -452,12 +453,15 @@ function bindMediaControls(
     clearCaptureError();
     let mediaId: string;
     try {
+      const binding = getBinding?.() ?? null;
       const result = await captureAndStoreMedia({
         sessionKey,
         ownerKey,
         kind,
         file,
         ownerLabel: getLabel?.(),
+        objektart: binding?.objektart,
+        protokollart: binding?.protokollart,
       });
       mediaId = result.record.id;
     } catch (error) {
@@ -536,7 +540,8 @@ function createMediaActionButtons(): {
 export function createCardMediaControls(
   getSessionKey: () => string | null,
   ownerKey: string,
-  getLabel?: () => string
+  getLabel?: () => string,
+  getBinding?: () => { objektart?: string; protokollart?: string } | null
 ): CardMediaControls {
   const root = document.createElement("div");
   root.className = "card-media";
@@ -556,7 +561,8 @@ export function createCardMediaControls(
     videoButton,
     photoInput,
     videoInput,
-    getLabel
+    getLabel,
+    getBinding
   );
 
   return { root, reload };
@@ -569,7 +575,8 @@ export function createRoomOkMediaRow(
   onOkChange: (checked: boolean) => void,
   getSessionKey: () => string | null,
   ownerKey: string,
-  getLabel?: () => string
+  getLabel?: () => string,
+  getBinding?: () => { objektart?: string; protokollart?: string } | null
 ): { row: HTMLDivElement; media: CardMediaControls } {
   const block = document.createElement("div");
   block.className = "room-ok-media-block";
@@ -612,7 +619,8 @@ export function createRoomOkMediaRow(
     videoButton,
     photoInput,
     videoInput,
-    getLabel
+    getLabel,
+    getBinding
   );
 
   return { row: block, media: { root: block, reload } };

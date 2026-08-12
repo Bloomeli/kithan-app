@@ -19,6 +19,7 @@ import {
 } from "./generateProtocolPdf";
 import { sendProtocolEmail } from "./sendProtocolEmail";
 import { uploadProtocolArchive, type ProtocolArchiveUploadResult } from "./protocolArchiveUpload";
+import { photoBelongsToSection } from "./mediaBinding";
 import { extensionFor } from "./blobFtpsUpload";
 import { acquireUploadWakeLock, releaseUploadWakeLock } from "./wakeLock";
 import { requestVorgangsnummer } from "./vorgangsnummer";
@@ -813,6 +814,14 @@ function getMediaSessionKey(): string | null {
     return null;
   }
   return getOrCreateVorgangId(context.objektart, context.protokollart);
+}
+
+function getMediaBinding(): { objektart: string; protokollart: string } | null {
+  const context = getCurrentFormContext();
+  if (!context) {
+    return null;
+  }
+  return { objektart: context.objektart, protokollart: context.protokollart };
 }
 
 async function removeOwnerMedia(ownerKey: string): Promise<void> {
@@ -2257,7 +2266,8 @@ function createStaticRoomCard(raum: RaumConfig, number: number, roomDraft: RoomD
     },
     getMediaSessionKey,
     raum.id,
-    () => raum.label
+    () => raum.label,
+    getMediaBinding
   );
   body.appendChild(okMediaRow);
 
@@ -2339,7 +2349,8 @@ function createWeitereRaumCard(
     },
     getMediaSessionKey,
     entry.id,
-    () => `Weiterer Raum ${index + 1}`
+    () => `Weiterer Raum ${index + 1}`,
+    getMediaBinding
   );
   body.appendChild(okMediaRow);
 
@@ -2454,7 +2465,8 @@ function createBueroRoomCard(
     },
     getMediaSessionKey,
     entry.id,
-    () => `Büro ${index + 1}`
+    () => `Büro ${index + 1}`,
+    getMediaBinding
   );
   body.appendChild(okMediaRow);
 
@@ -2583,7 +2595,8 @@ function createGarageRoomCard(
     },
     getMediaSessionKey,
     entry.id,
-    () => `Garage ${String(index + 1).padStart(2, "0")}`
+    () => `Garage ${String(index + 1).padStart(2, "0")}`,
+    getMediaBinding
   );
   body.appendChild(okMediaRow);
 
@@ -2806,7 +2819,8 @@ function createElectricityCard(
   const media = createCardMediaControls(
     getMediaSessionKey,
     entry.id,
-    () => `Stromzähler ${String(index + 1).padStart(2, "0")}`
+    () => `Stromzähler ${String(index + 1).padStart(2, "0")}`,
+    getMediaBinding
   );
   media.root.classList.add("card-media--meter");
   body.appendChild(media.root);
@@ -2901,7 +2915,8 @@ function createStandardMeterCard(
   const media = createCardMediaControls(
     getMediaSessionKey,
     entry.id,
-    () => `${config.title} ${String(index + 1).padStart(2, "0")}`
+    () => `${config.title} ${String(index + 1).padStart(2, "0")}`,
+    getMediaBinding
   );
   media.root.classList.add("card-media--meter");
   body.appendChild(media.root);
@@ -3367,7 +3382,8 @@ function collectRoomsForPdf(
   if (objektart === "garage") {
     (form.garageRooms ?? []).forEach((entry, index) => {
       rooms.push({
-        label: `Garage ${index + 1}`,
+        ownerKey: entry.id,
+        label: `Garage ${String(index + 1).padStart(2, "0")}`,
         ok: entry.ok,
         ausstattung: entry.ausstattung,
         maengel: entry.maengel,
@@ -3381,6 +3397,7 @@ function collectRoomsForPdf(
     RAEUME.privat.forEach((raum) => {
       const room = form.rooms[raum.id] ?? emptyRoomDraft();
       rooms.push({
+        ownerKey: raum.id,
         label: raum.label,
         ok: room.ok,
         ausstattung: room.ausstattung,
@@ -3390,6 +3407,7 @@ function collectRoomsForPdf(
     });
     (form.weitereRaeume ?? []).forEach((entry, index) => {
       rooms.push({
+        ownerKey: entry.id,
         label: `Weiterer Raum ${index + 1}`,
         ok: entry.ok,
         ausstattung: entry.ausstattung,
@@ -3407,6 +3425,7 @@ function collectRoomsForPdf(
   beforeBuero.forEach((raum) => {
     const room = form.rooms[raum.id] ?? emptyRoomDraft();
     rooms.push({
+      ownerKey: raum.id,
       label: raum.label,
       ok: room.ok,
       ausstattung: room.ausstattung,
@@ -3416,6 +3435,7 @@ function collectRoomsForPdf(
   });
   (form.bueroRooms ?? []).forEach((entry, index) => {
     rooms.push({
+      ownerKey: entry.id,
       label: `Büro ${index + 1}`,
       ok: entry.ok,
       ausstattung: entry.ausstattung,
@@ -3426,6 +3446,7 @@ function collectRoomsForPdf(
   afterBuero.forEach((raum) => {
     const room = form.rooms[raum.id] ?? emptyRoomDraft();
     rooms.push({
+      ownerKey: raum.id,
       label: raum.label,
       ok: room.ok,
       ausstattung: room.ausstattung,
@@ -3435,6 +3456,7 @@ function collectRoomsForPdf(
   });
   (form.weitereRaeume ?? []).forEach((entry, index) => {
     rooms.push({
+      ownerKey: entry.id,
       label: `Weiterer Raum ${index + 1}`,
       ok: entry.ok,
       ausstattung: entry.ausstattung,
@@ -3462,7 +3484,7 @@ function getRoomOwnerOrder(
   if (objektart === "garage") {
     return (form.garageRooms ?? []).map((entry, index) => ({
       ownerKey: entry.id,
-      label: `Garage ${index + 1}`,
+      label: `Garage ${String(index + 1).padStart(2, "0")}`,
     }));
   }
 
@@ -3495,49 +3517,94 @@ export interface VorgangMediaNamingEntry {
   /** 1-basiert, Position des Raums in der Übergabe/Rücknahme-Reihenfolge. */
   roomIndex: number;
   kind: "photo" | "video";
-  /** 1-basiert, laufende Nummer INNERHALB dieses Raums + Medientyps. */
+  /** 1-basiert, laufende Nummer INNERHALB dieses Raums + Medientyps — aus Capture-Metadaten. */
   indexWithinKind: number;
   /** z.B. "01-Flur-Foto-02.jpg" — Rohname, Zeichen-Feinschliff übernimmt sanitizeFilename serverseitig (siehe api/ftps-transfer.ts). */
   filename: string;
-  /** Original-Blob aus IndexedDB — für das Firmen-PDF (Schritt 6) genutzt, um Fotos einzubetten, ohne ein zweites Mal aus der DB zu lesen. */
   blob: Blob;
+  protocolId: string;
+  room: string;
+}
+
+function getMeterOwnerOrder(form: FormDraft): { ownerKey: string; label: string }[] {
+  const sections: { ownerKey: string; label: string }[] = [];
+  (form.meters?.strom ?? []).forEach((entry, index) => {
+    sections.push({
+      ownerKey: entry.id,
+      label: `Stromzähler ${String(index + 1).padStart(2, "0")}`,
+    });
+  });
+  STANDARD_METER_SECTIONS.forEach((config) => {
+    const entries = form.meters?.[config.type] ?? [];
+    entries.forEach((entry, index) => {
+      sections.push({
+        ownerKey: entry.id,
+        label: `${config.title} ${String(index + 1).padStart(2, "0")}`,
+      });
+    });
+  });
+  return sections;
 }
 
 /**
- * Schritt 5 des Architekturplans: berechnet die finale, lesbare Datei-
- * Nummerierung ("01-Flur-Foto-01.jpg", "02-Wohnzimmer-Video-01.mov", …) für
- * alle bereits aufgenommenen Fotos/Videos eines Vorgangs — Raum-Reihenfolge
- * wie im Formular, laufende Nummer pro Raum+Medientyp in Aufnahme-
- * Reihenfolge (bestehende createdAt-Sortierung aus getMediaForOwner).
- *
- * Reine Berechnung, keine Seiteneffekte: ändert nichts an Aufnahme, lokaler
- * IndexedDB-Speicherung oder dem heutigen Sofort-Upload beim Fotografieren.
- * Wird von den nächsten Schritten (Firmenversion-PDF mit Bildunterschriften/
- * Video-Verweisen, Ablage im Vorgangsordner) als Eingabe verwendet.
+ * Lädt Medien NUR für diesen Vorgang (protocolId === sessionKey) und nur für
+ * das jeweilige Feld. Kein Fallback auf Fotos anderer Vorgänge.
  */
 async function computeVorgangMediaNaming(
   sessionKey: string,
   objektart: "gewerbe" | "privat" | "garage",
   form: FormDraft
 ): Promise<VorgangMediaNamingEntry[]> {
-  const roomOrder = getRoomOwnerOrder(objektart, form);
+  const sectionOrder = [...getRoomOwnerOrder(objektart, form), ...getMeterOwnerOrder(form)];
   const entries: VorgangMediaNamingEntry[] = [];
 
-  for (let i = 0; i < roomOrder.length; i += 1) {
-    const room = roomOrder[i];
+  for (let i = 0; i < sectionOrder.length; i += 1) {
+    const section = sectionOrder[i];
     const roomIndex = i + 1;
     const roomPrefix = String(roomIndex).padStart(2, "0");
-    const records = await getMediaForOwner(sessionKey, room.ownerKey);
+    const records = await getMediaForOwner(sessionKey, section.ownerKey);
+
+    const eligible = records
+      .filter((record) =>
+        photoBelongsToSection(
+          {
+            sessionKey: record.sessionKey,
+            protocolId: record.protocolId || record.sessionKey,
+            ownerKey: record.ownerKey,
+            room: record.room || record.ownerLabel,
+          },
+          sessionKey,
+          section.ownerKey,
+          section.label
+        )
+      )
+      .sort((a, b) => {
+        const seqA = a.ownerSequence ?? 0;
+        const seqB = b.ownerSequence ?? 0;
+        if (seqA !== seqB) {
+          return seqA - seqB;
+        }
+        return a.createdAt - b.createdAt;
+      });
 
     let photoCount = 0;
     let videoCount = 0;
-    for (const record of records) {
-      const indexWithinKind = record.kind === "photo" ? (photoCount += 1) : (videoCount += 1);
+    for (const record of eligible) {
+      const capturedSequence =
+        record.ownerSequence && record.ownerSequence > 0
+          ? record.ownerSequence
+          : record.kind === "photo"
+            ? (photoCount += 1)
+            : (videoCount += 1);
+      if (record.ownerSequence && record.ownerSequence > 0) {
+        if (record.kind === "photo") {
+          photoCount += 1;
+        } else {
+          videoCount += 1;
+        }
+      }
       const kindLabel = record.kind === "photo" ? "Foto" : "Video";
       const ext = extensionFor(record.mimeType, record.kind);
-      // Sofort Bytes ablösen (wie Upload-Pfad): Safari/WebKit invalidiert
-      // IndexedDB-Blobs nach Transaktionsende — sonst scheitert oft gerade
-      // das zuerst gelesene Raumfoto (häufig Flur) beim späteren PDF-Einbetten.
       let blob = record.blob;
       if (record.kind === "photo") {
         try {
@@ -3547,20 +3614,23 @@ async function computeVorgangMediaNaming(
           }
         } catch (error) {
           console.warn(
-            `[vorgang-naming] Foto-Blob konnte nicht abgelöst werden (${room.label} ${String(indexWithinKind).padStart(2, "0")}):`,
+            `[vorgang-naming] Foto-Blob konnte nicht abgelöst werden (${section.label}):`,
             error
           );
         }
       }
+      const room = (record.room || record.ownerLabel || section.label).trim();
       entries.push({
         mediaId: record.id,
-        ownerKey: room.ownerKey,
-        roomLabel: room.label,
+        ownerKey: record.ownerKey,
+        roomLabel: section.label,
         roomIndex,
         kind: record.kind,
-        indexWithinKind,
-        filename: `${roomPrefix}-${room.label}-${kindLabel}-${String(indexWithinKind).padStart(2, "0")}${ext}`,
+        indexWithinKind: capturedSequence,
+        filename: `${roomPrefix}-${section.label}-${kindLabel}-${String(capturedSequence).padStart(2, "0")}${ext}`,
         blob,
+        protocolId: record.protocolId || record.sessionKey,
+        room,
       });
     }
   }
@@ -3568,27 +3638,26 @@ async function computeVorgangMediaNaming(
   return entries;
 }
 
-/**
- * Gruppiert die (bereits raum- und aufnahmereihenfolge-sortierten) Einträge
- * aus computeVorgangMediaNaming zu "Raum -> Foto-Blobs" fürs Firmen-PDF
- * (Schritt 6). Videos werden hier bewusst ausgefiltert — sie werden nie in
- * ein PDF eingebettet. Räume ganz ohne Foto tauchen im Ergebnis gar nicht
- * erst auf (das Firmen-PDF überspringt sie dann einfach).
- */
 function groupPhotosByRoomForCompanyPdf(entries: VorgangMediaNamingEntry[]): ProtocolPdfCompanyRoom[] {
-  const rooms: { roomIndex: number; label: string; photos: Blob[] }[] = [];
+  const rooms: ProtocolPdfCompanyRoom[] = [];
   for (const entry of entries) {
     if (entry.kind !== "photo") {
       continue;
     }
-    let room = rooms.find((r) => r.roomIndex === entry.roomIndex);
+    let room = rooms.find((r) => r.ownerKey === entry.ownerKey);
     if (!room) {
-      room = { roomIndex: entry.roomIndex, label: entry.roomLabel, photos: [] };
+      room = { ownerKey: entry.ownerKey, label: entry.roomLabel, photos: [] };
       rooms.push(room);
     }
-    room.photos.push(entry.blob);
+    room.photos.push({
+      blob: entry.blob,
+      protocolId: entry.protocolId,
+      room: entry.room,
+      ownerKey: entry.ownerKey,
+      sequence: entry.indexWithinKind,
+    });
   }
-  return rooms.sort((a, b) => a.roomIndex - b.roomIndex).map(({ label, photos }) => ({ label, photos }));
+  return rooms;
 }
 
 function collectStandardMetersForPdf(form: FormDraft): ProtocolPdfStandardMeter[] {
@@ -3600,6 +3669,7 @@ function collectStandardMetersForPdf(form: FormDraft): ProtocolPdfStandardMeter[
     const entries = form.meters?.[config.type] ?? [];
     entries.forEach((entry) => {
       meters.push({
+        ownerKey: entry.id,
         title: config.title,
         meterNumber: entry.meterNumber,
         reading: entry.reading,
@@ -3697,6 +3767,7 @@ function buildProtocolPdfInput(
     maengelStatus: maengelStatusLabel(form.kopfdaten.maengelStatus),
     rooms: collectRoomsForPdf(objektart, form),
     electricityMeters: (form.meters?.strom ?? []).map((entry) => ({
+      ownerKey: entry.id,
       meterNumber: entry.meterNumber,
       htReading: entry.htReading,
       ntReading: entry.ntReading,
@@ -4065,7 +4136,7 @@ async function syncOneSavedProtocol(protocol: SavedProtocol): Promise<boolean> {
       const pdfInput = buildProtocolPdfInput(protocol.objektart, protocol.protokollart, protocol.form);
       // Nur die vollständige Firmen-PDF (inkl. Fotos) darf als Archiv hochgeladen
       // werden — kein textliches Mieter-PDF als Ersatz.
-      generateAndDownloadProtocolPdf(pdfInput);
+      await generateAndDownloadProtocolPdf(pdfInput);
       const naming = await computeVorgangMediaNaming(
         protocol.vorgangId,
         protocol.objektart,
@@ -4073,7 +4144,8 @@ async function syncOneSavedProtocol(protocol: SavedProtocol): Promise<boolean> {
       );
       const company = await generateCompanyProtocolPdf(
         pdfInput,
-        groupPhotosByRoomForCompanyPdf(naming)
+        groupPhotosByRoomForCompanyPdf(naming),
+        protocol.vorgangId
       );
       pdfFilename = company.filename;
       pdfBase64 = company.base64;
@@ -4302,7 +4374,7 @@ async function finishProtocolAsPdf(): Promise<void> {
   console.log("[finishProtocolAsPdf] PDF generation started");
   try {
     protocolPdfInput = buildProtocolPdfInput(context.objektart, context.protokollart, formSnapshot);
-    completionMieterPdf = generateAndDownloadProtocolPdf(protocolPdfInput);
+    completionMieterPdf = await generateAndDownloadProtocolPdf(protocolPdfInput);
     mieterPdfOk = true;
     console.log(
       `[finishProtocolAsPdf] Mieter-PDF generated successfully (filename=${completionMieterPdf.filename}, base64Length=${completionMieterPdf.base64.length})`
@@ -4354,7 +4426,11 @@ async function finishProtocolAsPdf(): Promise<void> {
   if (mieterPdfOk && protocolPdfInput) {
     try {
       const photoRooms = groupPhotosByRoomForCompanyPdf(mediaNaming);
-      completionCompanyPdf = await generateCompanyProtocolPdf(protocolPdfInput, photoRooms);
+      completionCompanyPdf = await generateCompanyProtocolPdf(
+        protocolPdfInput,
+        photoRooms,
+        sessionKey
+      );
       console.log(
         `[finishProtocolAsPdf] Firmen-PDF generated successfully (filename=${completionCompanyPdf.filename}, base64Length=${completionCompanyPdf.base64.length}, Räume mit Fotos=${photoRooms.length})`
       );

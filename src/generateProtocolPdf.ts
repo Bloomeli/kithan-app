@@ -1,4 +1,5 @@
 import { jsPDF } from "jspdf";
+import { photoBelongsToSection, sequenceLetter } from "./mediaBinding";
 
 export interface ProtocolPdfRoom {
   label: string;
@@ -6,6 +7,7 @@ export interface ProtocolPdfRoom {
   ausstattung: string;
   maengel: string;
   bemerkungen: string;
+  ownerKey?: string;
 }
 
 export interface ProtocolPdfElectricityMeter {
@@ -13,6 +15,7 @@ export interface ProtocolPdfElectricityMeter {
   htReading: string;
   ntReading: string;
   notes: string;
+  ownerKey?: string;
 }
 
 export interface ProtocolPdfStandardMeter {
@@ -21,6 +24,7 @@ export interface ProtocolPdfStandardMeter {
   reading: string;
   location?: string;
   notes: string;
+  ownerKey?: string;
 }
 
 export interface ProtocolPdfKeyLine {
@@ -325,10 +329,19 @@ function debugLogPdfHeader(label: string, base64: string): void {
   }
 }
 
+export interface ProtocolPdfBoundPhoto {
+  blob: Blob;
+  protocolId: string;
+  room: string;
+  ownerKey: string;
+  sequence: number;
+}
+
 export interface ProtocolPdfCompanyRoom {
   label: string;
-  /** Fotos dieses Raums in Aufnahme-Reihenfolge. Videos gehören NICHT hierher (siehe generateCompanyProtocolPdf). */
-  photos: Blob[];
+  ownerKey: string;
+  /** Fotos dieses Felds in Capture-Sequenz. Videos gehören NICHT hierher. */
+  photos: ProtocolPdfBoundPhoto[];
 }
 
 /**
@@ -485,52 +498,72 @@ export class CompanyPhotoEmbedError extends Error {
   }
 }
 
-async function addCompanyPhotoSections(writer: PdfWriter, rooms: ProtocolPdfCompanyRoom[]): Promise<void> {
-  const roomsWithPhotos = rooms.filter((room) => room.photos.length > 0);
-  writer.addSection("Fotos");
-  if (roomsWithPhotos.length === 0) {
-    writer.addWrapped("Keine Fotos vorhanden.");
-    return;
-  }
-  for (let roomIndex = 0; roomIndex < roomsWithPhotos.length; roomIndex += 1) {
-    const room = roomsWithPhotos[roomIndex];
-    if (roomIndex > 0) {
-      writer.addDivider();
+async function addBoundPhotosToPdf(
+  writer: PdfWriter,
+  photos: ProtocolPdfBoundPhoto[],
+  currentProtocolId: string,
+  sectionOwnerKey: string,
+  sectionLabel: string
+): Promise<void> {
+  const eligible = photos.filter((photo) => {
+    if (
+      !photoBelongsToSection(
+        {
+          sessionKey: photo.protocolId,
+          protocolId: photo.protocolId,
+          ownerKey: photo.ownerKey,
+          room: photo.room,
+        },
+        currentProtocolId,
+        sectionOwnerKey,
+        sectionLabel
+      )
+    ) {
+      return false;
     }
-    writer.addSubsection(room.label);
-    for (let i = 0; i < room.photos.length; i += 1) {
-      // Schritt 2: gleiche Benennung wie beim Erfassen ("Flur 01", "Bad-WC 02").
-      const captionLabel = room.label.replace(/\//g, "-");
-      const caption = `${captionLabel} ${String(i + 1).padStart(2, "0")}`;
-      try {
-        await addSinglePhotoToPdf(writer, room.photos[i], caption);
-      } catch (error) {
-        console.error(`[generateProtocolPdf] Firmen-PDF: Foto konnte nicht eingebettet werden (${caption}):`, error);
-        // Kein Platzhalter, kein „erfolgreiches“ PDF — Abschluss gilt als fehlgeschlagen.
-        throw new CompanyPhotoEmbedError(caption);
-      }
+    return true;
+  });
+  for (const photo of eligible) {
+    const captionRoom = (photo.room || sectionLabel).replace(/\//g, "-");
+    const caption = `${captionRoom}_${sequenceLetter(photo.sequence)}`;
+    try {
+      await addSinglePhotoToPdf(writer, photo.blob, caption);
+    } catch (error) {
+      console.error(`[generateProtocolPdf] Firmen-PDF: Foto konnte nicht eingebettet werden (${caption}):`, error);
+      throw new CompanyPhotoEmbedError(caption);
     }
   }
 }
 
 /**
- * Schreibt den kompletten Text-Teil des Protokolls (Kopfdaten, Räume,
- * Zählerstände, Abschluss, Schlüsselübergabe, Unterschriften) auf den
- * übergebenen Writer. Gemeinsam genutzt von der Mieter-Version (nur Text,
- * siehe generateAndDownloadProtocolPdf) und der Firmen-Version (Text +
- * anschließend Fotos, siehe generateCompanyProtocolPdf) — beide Versionen
- * sollen hier textlich immer identisch bleiben. Die optionale
- * "addRoomDividers"-Option fügt (nur wenn true) eine dezente Trennlinie
- * zwischen den einzelnen Räumen im Abschnitt "Zustand der Räume" ein — rein
- * visuell, ändert keinen Inhalt/keine Reihenfolge. Wird ausschließlich von
- * der Firmen-Version gesetzt, damit das Mieter-PDF unverändert bleibt.
+ * Schreibt den Text-Teil des Protokolls. Die Firmen-Version kann je Abschnitt
+ * die bereits beim Aufnehmen gebundenen Fotos direkt danach einbetten
+ * (kein Sammelblock am Ende). Die Mieter-Version übergibt keine Fotos.
  */
-function writeProtocolBody(
+async function writeProtocolBody(
   writer: PdfWriter,
   input: ProtocolPdfInput,
-  options?: { addRoomDividers?: boolean }
-): void {
+  options?: {
+    addRoomDividers?: boolean;
+    currentProtocolId?: string;
+    photosByOwnerKey?: Map<string, ProtocolPdfBoundPhoto[]>;
+  }
+): Promise<void> {
   const addRoomDividers = options?.addRoomDividers ?? false;
+  const currentProtocolId = options?.currentProtocolId ?? "";
+  const photosByOwnerKey = options?.photosByOwnerKey;
+
+  const embedFor = async (ownerKey: string | undefined, sectionLabel: string): Promise<void> => {
+    if (!photosByOwnerKey || !currentProtocolId || !ownerKey) {
+      return;
+    }
+    const photos = photosByOwnerKey.get(ownerKey);
+    if (!photos?.length) {
+      return;
+    }
+    await addBoundPhotosToPdf(writer, photos, currentProtocolId, ownerKey, sectionLabel);
+  };
+
   writer.addTitle(`Protokoll ${input.protokollartLabel} – ${input.objektartLabel}`);
   writer.addLine("Objektart", input.objektartLabel);
   writer.addLine("Protokollart", input.protokollartLabel);
@@ -548,7 +581,8 @@ function writeProtocolBody(
   if (input.rooms.length === 0) {
     writer.addWrapped("Keine Raumdaten erfasst.");
   } else {
-    input.rooms.forEach((room, roomIndex) => {
+    for (let roomIndex = 0; roomIndex < input.rooms.length; roomIndex += 1) {
+      const room = input.rooms[roomIndex];
       if (addRoomDividers && roomIndex > 0) {
         writer.addDivider();
       }
@@ -557,39 +591,41 @@ function writeProtocolBody(
       writer.addLine("Ausstattung", room.ausstattung);
       writer.addLine("Festgestellte Mängel", room.maengel);
       writer.addLine("Bemerkungen", room.bemerkungen);
+      await embedFor(room.ownerKey, room.label);
       writer.addBlank(2);
-    });
+    }
   }
 
   writer.addSection("Zählerstände");
   if (input.electricityMeters.length === 0 && input.standardMeters.length === 0) {
     writer.addWrapped("Keine Zählerstände erfasst.");
   } else {
-    input.electricityMeters.forEach((meter, index) => {
-      writer.addSubsection(`Stromzähler ${String(index + 1).padStart(2, "0")}`);
+    for (let index = 0; index < input.electricityMeters.length; index += 1) {
+      const meter = input.electricityMeters[index];
+      const sectionLabel = `Stromzähler ${String(index + 1).padStart(2, "0")}`;
+      writer.addSubsection(sectionLabel);
       writer.addLine("Zählernummer", meter.meterNumber);
       writer.addLine("HT", meter.htReading);
       writer.addLine("NT", meter.ntReading);
       writer.addLine("Bemerkungen", meter.notes);
+      await embedFor(meter.ownerKey, sectionLabel);
       writer.addBlank(2);
-    });
-    // Nummerierung nur innerhalb derselben Zähler-Kategorie (title),
-    // nicht über die flache Gesamtliste aller Standard-Zähler hinweg —
-    // sonst würde z.B. der erste Warmwasserzähler fälschlich als
-    // "Warmwasser 4" erscheinen, wenn davor Gas/WMZ/Kaltwasser stehen.
+    }
     const standardMeterIndexByTitle = new Map<string, number>();
-    input.standardMeters.forEach((meter) => {
+    for (const meter of input.standardMeters) {
       const nextIndex = (standardMeterIndexByTitle.get(meter.title) ?? 0) + 1;
       standardMeterIndexByTitle.set(meter.title, nextIndex);
-      writer.addSubsection(`${meter.title} ${String(nextIndex).padStart(2, "0")}`);
+      const sectionLabel = `${meter.title} ${String(nextIndex).padStart(2, "0")}`;
+      writer.addSubsection(sectionLabel);
       if (meter.location !== undefined) {
         writer.addLine("Bezeichnung/Standort", meter.location);
       }
       writer.addLine("Zählernummer", meter.meterNumber);
       writer.addLine("Zählerstand", meter.reading);
       writer.addLine("Bemerkungen", meter.notes);
+      await embedFor(meter.ownerKey, sectionLabel);
       writer.addBlank(2);
-    });
+    }
   }
 
   writer.addSection("Abschluss");
@@ -610,9 +646,9 @@ function writeProtocolBody(
   writeSignatureSection(writer, input);
 }
 
-export function generateAndDownloadProtocolPdf(input: ProtocolPdfInput): ProtocolPdfBytes {
+export async function generateAndDownloadProtocolPdf(input: ProtocolPdfInput): Promise<ProtocolPdfBytes> {
   const writer = new PdfWriter();
-  writeProtocolBody(writer, input);
+  await writeProtocolBody(writer, input);
 
   const filename = buildFilename(input);
   const doc = writer.getDocument();
@@ -635,21 +671,27 @@ export function generateAndDownloadProtocolPdf(input: ProtocolPdfInput): Protoco
 }
 
 /**
- * Firmen-Version des Protokolls: identischer Text-Teil wie die Mieter-
- * Version, anschließend die aufgenommenen Fotos (gruppiert nach Raum, mit
- * Bildunterschrift "<Raum> – Foto <n>"), gruppiert und ausgerichtet wie in
- * Schritt 6 festgelegt. Videos werden bewusst NIE eingebettet — sie bleiben
- * ausschließlich als separate Mediendateien auf dem Server (Schritt 5:
- * Vorgangs-/Dateinamenslogik). Diese Version geht an den Firmenserver, NICHT
- * per E-Mail an den Mieter (siehe generateAndDownloadProtocolPdf dafür).
+ * Firmen-Version: identischer Text wie die Mieter-Version, Fotos aber direkt
+ * unter dem jeweiligen Raum/Zähler — nur mit passender protocolId + Raum.
  */
 export async function generateCompanyProtocolPdf(
   input: ProtocolPdfInput,
-  photoRooms: ProtocolPdfCompanyRoom[]
+  photoRooms: ProtocolPdfCompanyRoom[],
+  currentProtocolId: string
 ): Promise<ProtocolPdfBytes> {
+  const photosByOwnerKey = new Map<string, ProtocolPdfBoundPhoto[]>();
+  for (const section of photoRooms) {
+    if (!section.ownerKey) {
+      continue;
+    }
+    photosByOwnerKey.set(section.ownerKey, section.photos);
+  }
   const writer = new PdfWriter();
-  writeProtocolBody(writer, input, { addRoomDividers: true });
-  await addCompanyPhotoSections(writer, photoRooms);
+  await writeProtocolBody(writer, input, {
+    addRoomDividers: true,
+    currentProtocolId,
+    photosByOwnerKey,
+  });
 
   const filename = `Firma_${buildFilename(input)}`;
   const doc = writer.getDocument();

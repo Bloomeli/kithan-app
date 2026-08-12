@@ -16,6 +16,7 @@ import { processCapturedMedia } from "./mediaProcess";
 import { MEDIA_CONFIG } from "./mediaConfig";
 import { mediaUploadAdapter } from "./mediaUpload";
 import { extensionFor } from "./blobFtpsUpload";
+import { sequenceLetter } from "./mediaBinding";
 import {
   createMediaDiagContext,
   logStorageEstimate,
@@ -36,6 +37,8 @@ export interface CaptureMediaInput {
    * sich das Erfassen exakt wie bisher (kein Bereichs-Label/-Dateiname).
    */
   ownerLabel?: string;
+  objektart?: string;
+  protokollart?: string;
 }
 
 export interface CaptureMediaResult {
@@ -168,18 +171,14 @@ export async function captureAndStoreMedia(input: CaptureMediaInput): Promise<Ca
   try {
     const processed = await processCapturedMedia(input.kind, input.file, ctx);
 
-    // Schritt 2 (Foto-Benennung): Bereichszuordnung + fortlaufende Nummer
-    // werden bereits JETZT, beim Erfassen, berechnet und auf dem Datensatz
-    // gespeichert — nicht erst später beim Abschluss abgeleitet. Die Nummer
-    // basiert auf der höchsten bereits vergebenen Nummer in diesem Bereich +
-    // Medientyp (nicht auf der reinen Anzahl), damit ein zwischenzeitlich
-    // gelöschtes Foto keine doppelt vergebene Nummer für ein neues Foto
-    // verursachen kann.
-    let ownerLabel: string | undefined;
+    // Bindung JETZT beim Erfassen: protocolId + Raum/Feld + Sequenz (A, B, C).
+    // Diese Werte bleiben unverändert — auch bei späterem Upload/Retry.
+    const protocolId = input.sessionKey;
+    const room = input.ownerLabel?.trim() || undefined;
+    let ownerLabel: string | undefined = room;
     let ownerSequence: number | undefined;
     let friendlyFilename: string | undefined;
-    if (input.ownerLabel?.trim()) {
-      ownerLabel = input.ownerLabel.trim();
+    if (room) {
       try {
         const existingForOwner = await getMediaForOwner(input.sessionKey, input.ownerKey);
         const highestSequence = existingForOwner
@@ -187,15 +186,13 @@ export async function captureAndStoreMedia(input: CaptureMediaInput): Promise<Ca
           .reduce((max, existing) => Math.max(max, existing.ownerSequence ?? 0), 0);
         ownerSequence = highestSequence + 1;
         const ext = extensionFor(processed.mimeType, processed.kind);
-        const namePart = sanitizeOwnerLabelForFilename(ownerLabel);
-        friendlyFilename = `${namePart} ${String(ownerSequence).padStart(2, "0")}${ext}`;
+        const namePart = sanitizeOwnerLabelForFilename(room);
+        friendlyFilename = `${namePart}_${sequenceLetter(ownerSequence)}${ext}`;
       } catch (error) {
-        // Nummerierung ist rein zusätzlich (Anzeige-/Dateiname) — schlägt sie
-        // fehl, wird trotzdem ganz normal wie bisher gespeichert/hochgeladen.
-        console.warn("[mediaService] Bereichs-Nummerierung fehlgeschlagen, Erfassung läuft ohne Bereichsname weiter", error);
-        ownerLabel = undefined;
-        ownerSequence = undefined;
-        friendlyFilename = undefined;
+        console.warn(
+          "[mediaService] Sequenz-Nummerierung fehlgeschlagen — Foto wird trotzdem mit protocolId+Raum gespeichert",
+          error
+        );
       }
     }
 
@@ -211,6 +208,10 @@ export async function captureAndStoreMedia(input: CaptureMediaInput): Promise<Ca
       ownerLabel,
       ownerSequence,
       friendlyFilename,
+      protocolId,
+      objektart: input.objektart,
+      protokollart: input.protokollart,
+      room,
     };
     const saved = await saveMedia(record, ctx);
     await logStorageEstimate(ctx);
