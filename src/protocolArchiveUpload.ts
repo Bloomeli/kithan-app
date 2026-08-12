@@ -15,8 +15,6 @@ export interface ProtocolArchiveUploadInput {
   pdfBase64: string;
   /** Vorgangs-Ordner auf dem Firmenserver, z.B. "2026/Privat/Übergabe" (siehe getOrCreateVorgangId/requestVorgangsnummer in app.ts). Ohne Angabe: bisheriges flaches Basisverzeichnis. */
   pdfRemoteSubdir?: string;
-  /** Nur Schlüssel: offene Fotos in denselben Ordner wie das PDF. Garage/Privat/Gewerbe lassen das Feld weg. */
-  mediaRemoteSubdir?: string;
 }
 
 export interface ProtocolArchiveUploadResult {
@@ -131,7 +129,7 @@ export async function uploadProtocolArchive(
       continue;
     }
     try {
-      await uploadMediaRecord(record.id, input.mediaRemoteSubdir);
+      await uploadMediaRecord(record.id);
       result.photoUploaded += 1;
     } catch (error) {
       result.photoFailed += 1;
@@ -150,7 +148,7 @@ export async function uploadProtocolArchive(
       continue;
     }
     try {
-      await uploadMediaRecord(record.id, input.mediaRemoteSubdir);
+      await uploadMediaRecord(record.id);
       result.videoUploaded += 1;
     } catch (error) {
       result.videoFailed += 1;

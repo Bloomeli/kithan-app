@@ -4264,7 +4264,6 @@ async function syncOneSavedProtocol(protocol: SavedProtocol): Promise<boolean> {
       pdfFilename,
       pdfBase64,
       pdfRemoteSubdir,
-      mediaRemoteSubdir: protocol.objektart === "schluessel" ? pdfRemoteSubdir : undefined,
     });
     await persistFinishedProtocolPdfLocally(
       protocol.vorgangId,
@@ -4916,7 +4915,6 @@ async function finishSchluesselAsPdf(): Promise<void> {
         pdfFilename,
         pdfBase64: completionMieterPdf.base64,
         pdfRemoteSubdir,
-        mediaRemoteSubdir: pdfRemoteSubdir,
       });
       console.log(
         `[finishSchluesselAsPdf] uploadProtocolArchive result (nach ${Math.round((Date.now() - uploadStartedAt) / 1000)}s):`,
@@ -5523,6 +5521,26 @@ function goBackToObjektartView(): void {
   refreshUnsyncedProtocolsStartupBanner();
 }
 
+/**
+ * true, wenn der aktuelle Vorgang bereits über „Als Entwurf speichern“
+ * (Meine Entwürfe) oder über den Abschlussbutton (Gespeicherte Protokolle)
+ * lokal abgelegt wurde. Session-Autosave allein zählt nicht.
+ */
+function currentVorgangIsLocallySaved(): boolean {
+  const context = getCurrentFormContext();
+  if (!context) {
+    return false;
+  }
+  const vorgangId = localStorage.getItem(vorgangIdKey(context.objektart, context.protokollart));
+  if (!vorgangId) {
+    return false;
+  }
+  if (loadNamedDrafts().some((draft) => draft.vorgangId === vorgangId)) {
+    return true;
+  }
+  return loadSavedProtocols().some((protocol) => protocol.vorgangId === vorgangId);
+}
+
 function resetToObjektartView(): void {
   clearAllFormDrafts();
   clearKopfdatenFields();
@@ -5612,7 +5630,20 @@ function initEventListeners(): void {
   });
 
   btnNeustart.addEventListener("click", () => {
-    resetToObjektartView();
+    void (async () => {
+      if (!currentVorgangIsLocallySaved()) {
+        const proceed = await showConfirmDialog({
+          message:
+            "Dieser Vorgang wurde noch nicht gespeichert.\nMöchten Sie wirklich neu starten?\nNicht gespeicherte Eingaben, Fotos oder Unterschriften können dabei verloren gehen.",
+          cancelLabel: "Abbrechen",
+          confirmLabel: "Trotzdem neu starten",
+        });
+        if (!proceed) {
+          return;
+        }
+      }
+      resetToObjektartView();
+    })();
   });
 }
 

@@ -64,10 +64,7 @@ function uploadEnabled(): boolean {
  * Upload a record that is already safely in IndexedDB.
  * Always re-reads + detaches bytes before status writes and the upload call.
  */
-export async function uploadMediaRecord(
-  recordOrId: MediaRecord | string,
-  remoteSubdir?: string
-): Promise<MediaRecord> {
+export async function uploadMediaRecord(recordOrId: MediaRecord | string): Promise<MediaRecord> {
   const id = typeof recordOrId === "string" ? recordOrId : recordOrId.id;
 
   // Fresh IDB read + detached Blob for upload body (never reuse a closed-tx handle).
@@ -105,7 +102,6 @@ export async function uploadMediaRecord(
           pendingRemoteFilename: remoteFilename,
         });
       },
-      remoteSubdir,
     });
     const updated = await updateMediaUploadState(id, {
       uploadStatus: "uploaded",
