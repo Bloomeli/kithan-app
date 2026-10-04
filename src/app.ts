@@ -299,12 +299,12 @@ const OBJEKTE = [
   },
   {
     id: "nuernberger-str-24-26",
-    label: "Nürnberger Str. 24-26 (Außenstellplätze), 91052 Erlangen",
+    label: "Nürnberger Str. 24-26, 91052 Erlangen",
     strasse: "Nürnberger Str.",
     hausnummer: "24-26",
     plz: "91052",
     ort: "Erlangen",
-    zusatz: "Außenstellplätze",
+    zusatz: "",
   },
   {
     id: "michael-vogel-str-1a",

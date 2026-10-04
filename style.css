@@ -668,6 +668,13 @@ body {
    (statt einer festen ID-Liste) — sonst fehlt der Pfeil bei jedem neu
    hinzugefügten Dropdown (z.B. "Anzahl der Schlüssel"), das nicht zufällig
    eine der hier gelisteten IDs trägt. */
+.input-group select,
+.input-group select option {
+    /* iOS-Picker frisst sonst Leerzeichen in den Optionstexten. */
+    letter-spacing: normal;
+    word-spacing: normal;
+}
+
 .input-group select {
     appearance: none;
     -webkit-appearance: none;

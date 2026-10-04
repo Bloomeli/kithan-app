@@ -1,5 +1,10 @@
 import { jsPDF } from "jspdf";
 import { photoBelongsToSection, sequenceLetter } from "./mediaBinding";
+import {
+  KITHAN_LOGO_HEIGHT_PX,
+  KITHAN_LOGO_PNG_DATA_URL,
+  KITHAN_LOGO_WIDTH_PX,
+} from "./kithanLogo";
 
 export interface ProtocolPdfRoom {
   label: string;
@@ -140,11 +145,15 @@ class PdfWriter {
   private readonly doc: jsPDF;
   private y = MARGIN;
 
-  constructor() {
+  constructor(options?: { officialLogo?: boolean }) {
     this.doc = new jsPDF({ unit: "mm", format: "a4" });
     this.doc.setFont("helvetica", "normal");
     this.doc.setFontSize(11);
-    this.addFirstPageLogo();
+    if (options?.officialLogo) {
+      this.addOfficialLogo();
+    } else {
+      this.addFirstPageLogo();
+    }
   }
 
   getDocument(): jsPDF {
@@ -185,6 +194,15 @@ class PdfWriter {
     this.doc.setFont("helvetica", "normal");
     this.doc.setFontSize(11);
     this.y = lineY0 + lineWidths.length * 1.7 + 8;
+  }
+
+  /** Offizielles Firmenlogo nur auf Seite 1 — genutzt von der Schlüssel-PDF. */
+  private addOfficialLogo(): void {
+    const logoWidth = 58;
+    const logoHeight = logoWidth * (KITHAN_LOGO_HEIGHT_PX / KITHAN_LOGO_WIDTH_PX);
+    const x = (PAGE_WIDTH - logoWidth) / 2;
+    this.doc.addImage(KITHAN_LOGO_PNG_DATA_URL, "JPEG", x, this.y, logoWidth, logoHeight);
+    this.y += logoHeight + 5;
   }
 
   ensureSpace(neededMm: number): void {
@@ -282,6 +300,49 @@ class PdfWriter {
     this.doc.line(MARGIN, this.y, MARGIN + CONTENT_WIDTH, this.y);
     this.doc.setDrawColor(0, 0, 0);
     this.y += 4;
+  }
+
+  /** Klare Trennlinie zwischen den schriftlichen Schlüssel-Abschnitten. */
+  addSectionRule(): void {
+    this.ensureSpace(6);
+    this.y += 1.5;
+    this.doc.setDrawColor(0, 0, 0);
+    this.doc.setLineWidth(0.35);
+    this.doc.line(MARGIN, this.y, MARGIN + CONTENT_WIDTH, this.y);
+    this.y += 4;
+  }
+
+  addCompactSection(title: string): void {
+    this.ensureSpace(9);
+    this.y += 1.5;
+    this.doc.setFont("helvetica", "bold");
+    this.doc.setFontSize(12);
+    this.doc.text(title, MARGIN, this.y);
+    this.y += 5.5;
+    this.doc.setFont("helvetica", "normal");
+    this.doc.setFontSize(11);
+  }
+
+  addCompactSubsection(title: string): void {
+    this.ensureSpace(8);
+    this.doc.setFont("helvetica", "bold");
+    this.doc.setFontSize(11);
+    this.doc.text(title, MARGIN, this.y);
+    this.y += 5;
+    this.doc.setFont("helvetica", "normal");
+  }
+
+  addCompactSignatureBody(dataUrl: string | null): void {
+    if (!dataUrl) {
+      this.addWrapped("(keine Unterschrift)");
+      this.addBlank(1);
+      return;
+    }
+    const imgWidth = 72;
+    const imgHeight = 16;
+    this.ensureSpace(imgHeight + 4);
+    this.doc.addImage(dataUrl, "PNG", MARGIN, this.y, imgWidth, imgHeight);
+    this.y += imgHeight + 3;
   }
 
   /** Zentriertes Bild (z.B. Foto fürs Firmen-PDF) mit optionaler Bildunterschrift darunter. */
@@ -737,36 +798,55 @@ export async function generateCompanyProtocolPdf(
   return { filename, base64 };
 }
 
-export function generateAndDownloadSchluesselPdf(input: SchluesselPdfInput): { filename: string; base64: string } {
-  const writer = new PdfWriter();
-
+/**
+ * Schriftliches Schlüsselprotokoll in fester Reihenfolge, ohne Fotos und ohne Zeugen.
+ * Fotos dürfen erst NACH diesem Block (eigene Seite) eingefügt werden.
+ */
+function writeSchluesselWrittenProtocol(writer: PdfWriter, input: SchluesselPdfInput): void {
   writer.addTitle(`Protokoll ${input.protokollartLabel} – Schlüssel`);
   writer.addLine("Protokollart", input.protokollartLabel);
 
-  writer.addSection("Kopfdaten");
+  writer.addCompactSection("Kopfdaten");
   writer.addLine("Name des Empfängers", input.mietername);
   writer.addLine("Wohnung/Einheit", input.wohnungEinheit);
   if (input.wohnungsnummerLage) {
     writer.addLine("Wohnungsnummer / Lage", input.wohnungsnummerLage);
   }
   writer.addLine("Datum", formatDateDe(input.besichtigungsdatum));
+  writer.addSectionRule();
 
-  writer.addSection("Schlüssel");
+  writer.addCompactSection("Schlüssel");
   if (input.entries.length === 0) {
     writer.addWrapped("Keine Schlüsselangaben erfasst.");
   } else {
     input.entries.forEach((entry, index) => {
-      writer.addSubsection(`Schlüssel ${index + 1}`);
+      writer.addCompactSubsection(`Schlüssel ${index + 1}`);
       writer.addLine("Anzahl der Schlüssel", entry.anzahl);
       writer.addLine("Schlüsselnummer", entry.schluesselnummer);
-      writer.addBlank(2);
+      if (index < input.entries.length - 1) {
+        writer.addBlank(1);
+      }
     });
   }
+  writer.addSectionRule();
 
-  writer.addSection("Sonstiges/Bemerkungen");
+  writer.addCompactSection("Sonstiges/Bemerkungen");
   writer.addWrapped(textOrDash(input.bemerkungen));
+  writer.addSectionRule();
 
-  writeSignatureSection(writer, input, "Schlüsselempfänger");
+  writer.addCompactSection("Unterschriften");
+  writer.addLine("Datum", formatDateDe(input.signatureDatum));
+  writer.addCompactSubsection("Vermieter");
+  writer.addLine("Name in Druckbuchstaben", input.vermieterDruckbuchstaben);
+  writer.addCompactSignatureBody(input.vermieterSignaturePng);
+  writer.addCompactSubsection("Schlüsselempfänger");
+  writer.addLine("Name in Druckbuchstaben", input.mieterDruckbuchstaben);
+  writer.addCompactSignatureBody(input.mieterSignaturePng);
+}
+
+export function generateAndDownloadSchluesselPdf(input: SchluesselPdfInput): { filename: string; base64: string } {
+  const writer = new PdfWriter({ officialLogo: true });
+  writeSchluesselWrittenProtocol(writer, input);
 
   const filename = buildSchluesselFilename(input);
   const doc = writer.getDocument();
@@ -792,66 +872,51 @@ export async function generateCompanySchluesselPdf(
   photos: ProtocolPdfBoundPhoto[],
   currentProtocolId: string
 ): Promise<ProtocolPdfBytes> {
-  const writer = new PdfWriter();
+  const writer = new PdfWriter({ officialLogo: true });
+  writeSchluesselWrittenProtocol(writer, input);
 
-  writer.addTitle(`Protokoll ${input.protokollartLabel} – Schlüssel`);
-  writer.addLine("Protokollart", input.protokollartLabel);
-
-  writer.addSection("Kopfdaten");
-  writer.addLine("Name des Empfängers", input.mietername);
-  writer.addLine("Wohnung/Einheit", input.wohnungEinheit);
-  if (input.wohnungsnummerLage) {
-    writer.addLine("Wohnungsnummer / Lage", input.wohnungsnummerLage);
-  }
-  writer.addLine("Datum", formatDateDe(input.besichtigungsdatum));
-
-  writer.addSection("Schlüssel");
-  if (input.entries.length === 0) {
-    writer.addWrapped("Keine Schlüsselangaben erfasst.");
-  } else {
-    for (let index = 0; index < input.entries.length; index += 1) {
-      const entry = input.entries[index];
-      writer.addSubsection(`Schlüssel ${index + 1}`);
-      writer.addLine("Anzahl der Schlüssel", entry.anzahl);
-      writer.addLine("Schlüsselnummer", entry.schluesselnummer);
-      const ownerKey = (entry.ownerKey || "").trim();
-      const label = `Schlüssel ${String(index + 1).padStart(2, "0")}`;
-      const eligible = ownerKey
-        ? photos.filter((photo) =>
-            photoBelongsToSection(
-              {
-                sessionKey: photo.protocolId,
-                protocolId: photo.protocolId,
-                ownerKey: photo.ownerKey,
-                room: photo.room,
-              },
-              currentProtocolId,
-              ownerKey,
-              label
-            )
+  const photoAppendix: { blob: Blob; caption: string }[] = [];
+  input.entries.forEach((entry, index) => {
+    const ownerKey = (entry.ownerKey || "").trim();
+    const label = `Schlüssel ${String(index + 1).padStart(2, "0")}`;
+    const eligible = ownerKey
+      ? photos.filter((photo) =>
+          photoBelongsToSection(
+            {
+              sessionKey: photo.protocolId,
+              protocolId: photo.protocolId,
+              ownerKey: photo.ownerKey,
+              room: photo.room,
+            },
+            currentProtocolId,
+            ownerKey,
+            label
           )
-        : [];
-      for (let i = 0; i < eligible.length; i += 1) {
-        const photo = eligible[i];
-        const caption = `${label} ${String(i + 1).padStart(2, "0")}`;
-        try {
-          await addSinglePhotoToPdf(writer, photo.blob, caption);
-        } catch (error) {
-          console.error(
-            `[generateProtocolPdf] Schlüssel-PDF: Foto konnte nicht eingebettet werden (${caption}):`,
-            error
-          );
-          throw new CompanyPhotoEmbedError(caption);
-        }
+        )
+      : [];
+    eligible.forEach((photo, photoIndex) => {
+      photoAppendix.push({
+        blob: photo.blob,
+        caption: `${label} ${String(photoIndex + 1).padStart(2, "0")}`,
+      });
+    });
+  });
+
+  // Page-Break-Garantie: kein Foto vor Abschluss von Bemerkungen/Unterschriften.
+  if (photoAppendix.length > 0) {
+    writer.forceNewPage();
+    for (const item of photoAppendix) {
+      try {
+        await addSinglePhotoToPdf(writer, item.blob, item.caption);
+      } catch (error) {
+        console.error(
+          `[generateProtocolPdf] Schlüssel-PDF: Foto konnte nicht eingebettet werden (${item.caption}):`,
+          error
+        );
+        throw new CompanyPhotoEmbedError(item.caption);
       }
-      writer.addBlank(2);
     }
   }
-
-  writer.addSection("Sonstiges/Bemerkungen");
-  writer.addWrapped(textOrDash(input.bemerkungen));
-
-  writeSignatureSection(writer, input, "Schlüsselempfänger");
 
   const filename = `Firma_${buildSchluesselFilename(input)}`;
   const doc = writer.getDocument();
